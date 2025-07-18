@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+   <!-- 뷰 등록 -->
+   <extension point="org.eclipse.ui.views">
+      <category
+            id="com.fabrix.copilot.category"
+            name="FabriX Copilot"/>
+      <view
+            category="com.fabrix.copilot.category"
+            class="com.fabrix.copilot.ui.ChatView"
+            id="com.fabrix.copilot.views.chatView"
+            name="FabriX Chat"
+            restorable="true"/>
+   </extension>
+   
+   <!-- 메뉴 등록 -->
+   <extension point="org.eclipse.ui.menus">
+      <menuContribution locationURI="menu:org.eclipse.ui.main.menu?after=help">
+         <menu id="com.fabrix.copilot.menu" label="FabriX Copilot">
+            <command
+                  commandId="com.fabrix.copilot.commands.openChat"
+                  label="채팅 윈도우 열기"
+                  style="push"/>
+         </menu>
+      </menuContribution>
+      
+      <!-- 툴바에도 추가 -->
+      <menuContribution locationURI="toolbar:org.eclipse.ui.main.toolbar?after=additions">
+         <toolbar id="com.fabrix.copilot.toolbar">
+            <command
+                  commandId="com.fabrix.copilot.commands.openChat"
+                  label="FabriX Chat"
+                  tooltip="FabriX Copilot 채팅 열기"
+                  style="push"/>
+         </toolbar>
+      </menuContribution>
+   </extension>
+   
+   <!-- 명령어 등록 -->
+   <extension point="org.eclipse.ui.commands">
+      <command
+            id="com.fabrix.copilot.commands.openChat"
+            name="Open FabriX Chat"/>
+   </extension>
+   
+   <extension point="org.eclipse.ui.handlers">
+      <handler
+            class="com.fabrix.copilot.handlers.OpenChatHandler"
+            commandId="com.fabrix.copilot.commands.openChat"/>
+   </extension>
+   
+   <!-- 설정 페이지 등록 -->
+   <extension point="org.eclipse.ui.preferencePages">
+      <page
+            class="com.fabrix.copilot.ui.FabriXPreferencePage"
+            id="com.fabrix.copilot.preferences"
+            name="FabriX Copilot"/>
+   </extension>
+   
+   <!-- 키보드 단축키 -->
+   <extension point="org.eclipse.ui.bindings">
+      <key
+            commandId="com.fabrix.copilot.commands.openChat"
+            contextId="org.eclipse.ui.contexts.window"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="Ctrl+Alt+F"/>
+   </extension>
+</plugin>
