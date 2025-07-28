@@ -74,6 +74,10 @@ public class ChatView extends ViewPart {
     private Label characterCountLabel;
     private Combo codeAttachCombo;
     
+    // 코드 첨부 관련 UI
+    private Label attachStatusLabel;
+    private Button clearAttachButton;
+    
     // 비즈니스 로직
     private LLMClient llmClient;
     private PreferenceManager preferenceManager;
@@ -85,6 +89,7 @@ public class ChatView extends ViewPart {
     private boolean isProcessing = false;
     private Map<String, ModelInfo> modelMap = new HashMap<>();
     private String attachedCode = "";
+    private String attachedFileName = "";
     
     @Override
     public void createPartControl(Composite parent) {
@@ -235,7 +240,7 @@ public class ChatView extends ViewPart {
         attachCodeItem.addSelectionListener(new SelectionAdapter() {
             @Override
             public void widgetSelected(SelectionEvent e) {
-                attachCurrentCode();
+            	attachCurrentSelection();
             }
         });
         
@@ -428,7 +433,7 @@ public class ChatView extends ViewPart {
         Display.getDefault().asyncExec(() -> refreshCodeContexts());
     }
     
- // 첨부 상태 업데이트 메서드
+    // 첨부 상태 업데이트 메서드
     private void updateAttachmentStatus(String fileName, int length) {
         if (fileName != null && !fileName.isEmpty()) {
             attachStatusLabel.setText(String.format("%s (%s)", fileName, formatFileSize(length)));
@@ -460,25 +465,7 @@ public class ChatView extends ViewPart {
         addMessage("📎 첨부된 코드가 제거되었습니다.", false);
     }
     
-    
-    private void handleFileSelection() {
-        String selected = codeAttachCombo.getText();
-        
-        if ("None".equals(selected) || selected.startsWith("---")) {
-            attachedCode = "";
-            return;
-        }
-        
-        if ("Current Selection".equals(selected)) {
-            attachCurrentSelection();
-        } else if ("Current File".equals(selected)) {
-            attachCurrentFile();
-        } else {
-            // 특정 파일 선택
-            loadFileContent(selected);
-        }
-    }
- // 새로운 메서드: 현재 선택 영역 첨부
+    // 현재 선택 영역 첨부
     private void attachCurrentSelection() {
         String selection = contextCollector.getCurrentCodeContext();
         if (!selection.isEmpty()) {
@@ -496,7 +483,8 @@ public class ChatView extends ViewPart {
                 "에디터에서 첨부할 코드를 먼저 선택해주세요.");
         }
     }
- // 새로운 메서드: 현재 파일 전체 첨부
+    
+    // 현재 파일 전체 첨부
     private void attachCurrentFile() {
         String fileName = contextCollector.getCurrentFileName();
         if (!fileName.isEmpty()) {
@@ -527,7 +515,7 @@ public class ChatView extends ViewPart {
         }
     }
 
-    // 새로운 메서드: 특정 파일 내용 로드
+    // 특정 파일 내용 로드
     private void loadFileContent(String fileName) {
         Job job = new Job("Loading file: " + fileName) {
             @Override
@@ -538,7 +526,9 @@ public class ChatView extends ViewPart {
                     Display.getDefault().asyncExec(() -> {
                         if (!content.isEmpty()) {
                             attachedCode = content;
-                            addMessage("📎 파일이 첨부되었습니다: " + fileName + " (" + content.length() + " 문자)", false);
+                            attachedFileName = fileName;
+                            updateAttachmentStatus(fileName, content.length());
+                            addMessage("📎 파일이 첨부되었습니다: " + fileName, false);
                         } else {
                             addMessage("❌ 파일 내용을 읽을 수 없습니다: " + fileName, false);
                         }
@@ -557,24 +547,6 @@ public class ChatView extends ViewPart {
         
         job.setUser(false);
         job.schedule();
-    }
-    
-    private void attachSelectedFile() {
-        String selected = codeAttachCombo.getText();
-        if (!"None".equals(selected) && !selected.startsWith("---")) {
-            handleFileSelection();
-        } else {
-            addMessage("❌ 첨부할 파일을 선택해주세요.", false);
-        }
-    }
-    
-    private String getFileExtension(String fileName) {
-        if (fileName == null || fileName.equals("선택된 코드")) return "";
-        int lastDot = fileName.lastIndexOf('.');
-        if (lastDot > 0 && lastDot < fileName.length() - 1) {
-            return fileName.substring(lastDot + 1).toLowerCase();
-        }
-        return "";
     }
     
     private void createSendArea() {
@@ -628,41 +600,112 @@ public class ChatView extends ViewPart {
 
         setProcessingState(true);
 
-        String fullMessage = message;
-        if (!attachedCode.isEmpty()) {
-            fullMessage += "\n\n📎 첨부된 코드:\n```\n" + attachedCode + "\n```";
-        }
-
+        // 사용자에게 보이는 메시지는 원본 메시지만
         addMessage("👤 " + message, true);
         conversationManager.addMessage(currentSessionId, message, true);
 
         String selectedModel = getSelectedModelId();
+        
+        // 컨텍스트 생성 (파일 코드 포함)
         String context = getCurrentContext();
-
-        // 비동기 방식으로 LLMClient 호출
-        agentOrchestrator.processComplexRequestAsync(fullMessage, context, selectedModel,
+        
+        // MCP 도구 요청은 MCP가 설정되어 있고, 명시적으로 요청한 경우만
+        if (shouldUseMCPTool(message)) {
+            executeMCPTool(message, selectedModel);
+        } else {
+            // 일반 메시지 처리 - 컨텍스트에 첨부 파일 내용 포함
+            agentOrchestrator.processComplexRequestAsync(message, context, selectedModel,
+                response -> {
+                    Display.getDefault().asyncExec(() -> {
+                        if (chatContent.isDisposed()) return;
+                        addMessage("🤖 " + response, false);
+                        conversationManager.addMessage(currentSessionId, response, false);
+                        setProcessingState(false);
+                        inputText.setText("");
+                        
+                        // 첨부 파일은 유지 (Copilot처럼)
+                        // clearAttachedCode(); // 제거
+                    });
+                },
+                error -> {
+                    Display.getDefault().asyncExec(() -> {
+                        if (chatContent.isDisposed()) return;
+                        String errorMessage = "❌ 오류: " + error.getMessage();
+                        addMessage(errorMessage, false);
+                        setProcessingState(false);
+                        CopilotLogger.error("Message processing failed", error);
+                    });
+                }
+            );
+        }
+    }
+    
+    // MCP 도구 사용 여부 결정 - MCP가 설정되어 있고 명시적 요청인 경우만
+    private boolean shouldUseMCPTool(String message) {
+        // MCP 서버가 연결되어 있는지 확인
+        McpServerManager.McpStatus status = McpServerManager.getInstance().getStatus();
+        if (status.getConnectedServers() == 0) {
+            return false;
+        }
+        
+        // 명시적인 도구 요청인지 확인
+        String lower = message.toLowerCase();
+        
+        // 파일 시스템 작업 (단순 파일 참조가 아닌 작업 요청)
+        boolean explicitFileOperation = 
+            (lower.contains("파일") && (lower.contains("목록") || lower.contains("리스트"))) ||
+            (lower.contains("디렉토리") && (lower.contains("보여") || lower.contains("확인"))) ||
+            (lower.contains("파일") && lower.contains("저장")) ||
+            (lower.contains("파일") && lower.contains("생성"));
+            
+        // Git 명령
+        boolean gitOperation = lower.contains("git") || lower.contains("깃");
+        
+        // 명시적인 MCP 도구 언급
+        boolean explicitMCP = lower.contains("mcp") || lower.contains("도구 사용");
+        
+        return explicitFileOperation || gitOperation || explicitMCP;
+    }
+    
+    // MCP 도구 실행
+    private void executeMCPTool(String message, String modelId) {
+        String mcpContext = "MCP Tool Request: " + message;
+        if (!attachedCode.isEmpty()) {
+            mcpContext += "\n\nAttached Code:\n" + attachedCode;
+        }
+        
+        agentOrchestrator.processComplexRequestAsync(message, mcpContext, modelId,
             response -> {
-                // 성공 콜백 (UI 스레드에서 안전하게 실행됨)
                 Display.getDefault().asyncExec(() -> {
                     if (chatContent.isDisposed()) return;
-                    addMessage("🤖 " + response, false);
+                    
+                    // MCP 도구 실행 결과 표시
+                    addMessage("🔌 MCP 도구 실행 결과:\n" + response, false);
                     conversationManager.addMessage(currentSessionId, response, false);
                     setProcessingState(false);
                     inputText.setText("");
-                    attachedCode = "";
+                    clearAttachedCode();
                 });
             },
             error -> {
-                // 실패 콜백 (UI 스레드에서 안전하게 실행됨)
                 Display.getDefault().asyncExec(() -> {
                     if (chatContent.isDisposed()) return;
-                    String errorMessage = "❌ 오류: " + error.getMessage();
+                    String errorMessage = "❌ MCP 도구 실행 실패: " + error.getMessage();
                     addMessage(errorMessage, false);
                     setProcessingState(false);
-                    CopilotLogger.error("Message processing failed", error);
+                    CopilotLogger.error("MCP tool execution failed", error);
                 });
             }
         );
+    }
+    
+    private String getFileExtension(String fileName) {
+        if (fileName == null || fileName.equals("선택된 코드")) return "";
+        int lastDot = fileName.lastIndexOf('.');
+        if (lastDot > 0 && lastDot < fileName.length() - 1) {
+            return fileName.substring(lastDot + 1).toLowerCase();
+        }
+        return "";
     }
     
     private void setProcessingState(boolean processing) {
@@ -707,6 +750,11 @@ public class ChatView extends ViewPart {
             • **McpAgent** - 외부 도구 연동 (파일, Git, DB 등)
             • **GeneralAgent** - 일반 질문 및 대화
             
+            **🔌 MCP 도구 예시:**
+            • "현재 디렉토리의 파일 목록을 보여줘"
+            • "main.java 파일을 읽어줘"
+            • "Git 상태를 확인해줘"
+            
             **⌨️ 단축키:**
             • `Ctrl + Enter` - 메시지 전송
             • `Ctrl + Alt + F` - 채팅 창 열기
@@ -719,6 +767,13 @@ public class ChatView extends ViewPart {
         // API 키 상태 확인
         if (!preferenceManager.hasValidAPIKey()) {
             addMessage("⚠️ API 키가 설정되지 않았습니다. Settings에서 설정해주세요.", false);
+        }
+        
+        // MCP 상태 표시
+        McpServerManager.McpStatus mcpStatus = McpServerManager.getInstance().getStatus();
+        if (mcpStatus.getTotalServers() > 0) {
+            addMessage(String.format("🔌 MCP 서버 상태: %d/%d 연결됨", 
+                mcpStatus.getConnectedServers(), mcpStatus.getTotalServers()), false);
         }
     }
     
@@ -749,7 +804,7 @@ public class ChatView extends ViewPart {
     }
     
     private void openSettingsDialog() {
-        SettingsDialog dialog = new SettingsDialog(getSite().getShell());
+        SettingsDialog dialog = new SettingsDialog(getShell());
         if (dialog.open() == Window.OK) {
             loadInitialData();
             loadAvailableModels();
@@ -759,12 +814,15 @@ public class ChatView extends ViewPart {
     }
     
     private void openMCPDialog() {
-        MCPManagerDialog dialog = new MCPManagerDialog(getSite().getShell());
+        MCPManagerDialog dialog = new MCPManagerDialog(getShell());
         dialog.open();
+        
+        // MCP 다이얼로그 닫은 후 상태 업데이트
+        updateConnectionStatus();
     }
     
     private void openSnippetDialog() {
-        SnippetDialog dialog = new SnippetDialog(getSite().getShell(), snippetManager);
+        SnippetDialog dialog = new SnippetDialog(getShell(), snippetManager);
         if (dialog.open() == Window.OK) {
             String selectedSnippet = dialog.getSelectedSnippet();
             if (selectedSnippet != null) {
@@ -844,28 +902,10 @@ public class ChatView extends ViewPart {
     }
     
     private void attachCurrentCode() {
-        String code = contextCollector.getCurrentCodeContext();
-        if (!code.isEmpty()) {
-            attachedCode = code;
-            addMessage("📎 코드가 첨부되었습니다 (" + code.length() + " 문자)", false);
-            
-            // 스니펫으로 저장 옵션
-            if (MessageDialog.openQuestion(getSite().getShell(), 
-                "스니펫 저장", "이 코드를 스니펫으로 저장하시겠습니까?")) {
-                String name = InputDialog.open(getSite().getShell(), 
-                    "스니펫 이름", "스니펫 이름을 입력하세요:");
-                if (name != null && !name.isEmpty()) {
-                    String language = contextCollector.getCurrentFileLanguage();
-                    snippetManager.saveSnippet(name, code, language);
-                    addMessage("✅ 스니펫이 저장되었습니다: " + name, false);
-                }
-            }
-        } else {
-            addMessage("❌ 선택된 코드가 없습니다. 에디터에서 코드를 선택해주세요.", false);
-        }
+           // 현재 선택 영역을 첨부합니다.
+           attachCurrentSelection();
     }
     
- // ChatView.java의 refreshCodeContexts 메서드 수정
     private void refreshCodeContexts() {
         codeAttachCombo.setEnabled(false);
         
@@ -911,7 +951,7 @@ public class ChatView extends ViewPart {
             return;
         }
         
-        FileDialog dialog = new FileDialog(getSite().getShell(), SWT.SAVE);
+        FileDialog dialog = new FileDialog(getShell(), SWT.SAVE);
         dialog.setFilterExtensions(new String[]{"*.md", "*.txt", "*.json", "*.html"});
         dialog.setFilterNames(new String[]{"Markdown", "Plain Text", "JSON", "HTML"});
         dialog.setFileName("chat-export-" + new SimpleDateFormat("yyyyMMdd-HHmmss").format(new Date()));
@@ -950,7 +990,7 @@ public class ChatView extends ViewPart {
     
     private void startNewConversation() {
         if (!conversationManager.getConversationHistory(currentSessionId).isEmpty()) {
-            boolean confirm = MessageDialog.openConfirm(getSite().getShell(), 
+            boolean confirm = MessageDialog.openConfirm(getShell(), 
                 "새 대화", "현재 대화를 저장하고 새 대화를 시작하시겠습니까?");
             if (!confirm) return;
         }
@@ -963,7 +1003,7 @@ public class ChatView extends ViewPart {
     
     private void showConversationHistory() {
         ConversationHistoryDialog dialog = new ConversationHistoryDialog(
-            getSite().getShell(), conversationManager);
+            getShell(), conversationManager);
         
         if (dialog.open() == Window.OK) {
             String selectedSessionId = dialog.getSelectedSessionId();
@@ -995,7 +1035,7 @@ public class ChatView extends ViewPart {
     }
     
     private void clearChatHistory() {
-        boolean confirm = MessageDialog.openConfirm(getSite().getShell(), 
+        boolean confirm = MessageDialog.openConfirm(getShell(), 
             "대화 삭제", "현재 대화를 삭제하시겠습니까?");
         if (confirm) {
             conversationManager.clearConversation(currentSessionId);
@@ -1023,9 +1063,32 @@ public class ChatView extends ViewPart {
             context.append("선택된 코드:\n```\n").append(selectedCode).append("\n```\n");
         }
         
-        // 첨부된 코드
+        // 첨부된 파일의 코드 (Copilot처럼 컨텍스트로 전달)
         if (!attachedCode.isEmpty()) {
-            context.append("첨부된 코드:\n```\n").append(attachedCode).append("\n```\n");
+            String language = getFileExtension(attachedFileName);
+            context.append("\n첨부된 파일: ").append(attachedFileName).append("\n");
+            context.append("```").append(language).append("\n");
+            context.append(attachedCode);
+            context.append("\n```\n");
+        }
+        
+        // MCP 도구 가용성 (연결된 경우만)
+        McpServerManager mcpManager = McpServerManager.getInstance();
+        McpServerManager.McpStatus status = mcpManager.getStatus();
+        if (status.getConnectedServers() > 0) {
+            context.append("\nMCP 도구 사용 가능: ").append(status.getTotalTools()).append("개\n");
+            
+            // 사용 가능한 도구 목록
+            Map<String, List<McpServerManager.McpTool>> tools = mcpManager.getConnectedTools();
+            if (!tools.isEmpty()) {
+                context.append("도구 목록: ");
+                tools.values().stream()
+                    .flatMap(List::stream)
+                    .map(McpServerManager.McpTool::getName)
+                    .distinct()
+                    .forEach(toolName -> context.append(toolName).append(", "));
+                context.append("\n");
+            }
         }
         
         return context.toString();
@@ -1037,10 +1100,11 @@ public class ChatView extends ViewPart {
                 boolean hasApi = preferenceManager.hasValidAPIKey();
                 McpServerManager.McpStatus mcpStatus = McpServerManager.getInstance().getStatus();
                 
-                String status = String.format("API: %s | MCP: %d/%d servers", 
+                String status = String.format("API: %s | MCP: %d/%d servers, %d tools", 
                     hasApi ? "✅" : "❌",
                     mcpStatus.getConnectedServers(),
-                    mcpStatus.getTotalServers());
+                    mcpStatus.getTotalServers(),
+                    mcpStatus.getTotalTools());
                 
                 statusLabel.setText(status);
                 updateConnectionStatus(); // 재귀 호출
@@ -1056,27 +1120,219 @@ public class ChatView extends ViewPart {
             addMessage("✅ " + apiType + " API 키가 설정되어 있습니다.", false);
         }
         
-        // MCP 서버 상태
-        McpServerManager manager = McpServerManager.getInstance();
-        manager.loadLocalMCPConfig();
-        
-        // 테스트를 위한 기본 MCP 서버 추가
-        try {
-            com.fabrix.copilot.test.TestMCPSetup.setupTestMCPServers();
-        } catch (Exception e) {
-            CopilotLogger.warn("Failed to setup test MCP servers: " + e.getMessage());
-        }
-        
-        McpServerManager.McpStatus status = manager.getStatus();
-        if (status.getTotalServers() > 0) {
-            addMessage(String.format("🔌 MCP: %d개 서버 중 %d개 연결됨", 
-                status.getTotalServers(), status.getConnectedServers()), false);
-        }
+        // MCP 서버 초기화
+        initializeMCPServers();
         
         // 초기 파일 목록 로드
         Display.getDefault().asyncExec(() -> {
             refreshCodeContexts();
         });
+    }
+    
+    private void initializeMCPServers() {
+        McpServerManager manager = McpServerManager.getInstance();
+        
+        // 로컬 설정 로드
+        manager.loadLocalMCPConfig();
+        
+        // NPX 확인 및 안내
+        if (!checkNPXAvailability()) {
+            addMessage("⚠️ npx를 찾을 수 없습니다. Node.js가 설치되어 있는지 확인하세요.", false);
+            addMessage("💡 npx는 npm 5.2.0 이상에 포함되어 있습니다. 다음 명령으로 확인하세요:", false);
+            addMessage("```\nnpm --version\nnpx --version\n```", false);
+            return;
+        }
+        
+        // 개발/테스트용 기본 MCP 서버 추가
+        if (!preferenceManager.getBooleanValue("mcp.skip_default_servers", false)) {
+            try {
+                // 다양한 방법으로 MCP 서버 시작 시도
+                boolean connected = false;
+                
+                // 방법 1: npx로 직접 실행
+                if (!connected) {
+                    connected = tryNPXConnection(manager);
+                }
+                
+                // 방법 2: 글로벌 설치된 경우
+                if (!connected) {
+                    connected = tryGlobalInstallation(manager);
+                }
+                
+                // 방법 3: 로컬 node_modules
+                if (!connected) {
+                    connected = tryLocalInstallation(manager);
+                }
+                
+                if (!connected) {
+                    addMessage("⚠️ MCP 서버 연결 실패. 다음 명령으로 설치해보세요:", false);
+                    addMessage("```\nnpm install -g @modelcontextprotocol/server-filesystem\n```", false);
+                }
+                
+            } catch (Exception e) {
+                CopilotLogger.warn("Failed to setup default MCP servers: " + e.getMessage());
+            }
+        }
+        
+        // 상태 표시
+        McpServerManager.McpStatus status = manager.getStatus();
+        if (status.getTotalServers() > 0 && status.getConnectedServers() > 0) {
+            addMessage(String.format("🔌 MCP: %d개 서버 중 %d개 연결됨 (%d개 도구 사용 가능)", 
+                status.getTotalServers(), 
+                status.getConnectedServers(),
+                status.getTotalTools()), false);
+            
+            // 사용 가능한 도구 목록 표시
+            if (status.getTotalTools() > 0) {
+                Map<String, List<McpServerManager.McpTool>> tools = manager.getConnectedTools();
+                StringBuilder toolsMsg = new StringBuilder("📋 사용 가능한 도구:\n");
+                for (Map.Entry<String, List<McpServerManager.McpTool>> entry : tools.entrySet()) {
+                    toolsMsg.append("• ").append(entry.getKey()).append(": ");
+                    toolsMsg.append(entry.getValue().stream()
+                        .map(McpServerManager.McpTool::getName)
+                        .collect(Collectors.joining(", ")));
+                    toolsMsg.append("\n");
+                }
+                addMessage(toolsMsg.toString(), false);
+            }
+        }
+    }
+    
+    private boolean checkNPXAvailability() {
+        try {
+            ProcessBuilder pb = new ProcessBuilder();
+            String os = System.getProperty("os.name").toLowerCase();
+            
+            if (os.contains("win")) {
+                pb.command("cmd", "/c", "npx", "--version");
+            } else {
+                pb.command("sh", "-c", "npx --version");
+            }
+            
+            Process process = pb.start();
+            boolean success = process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+            
+            if (success && process.exitValue() == 0) {
+                CopilotLogger.info("npx is available");
+                return true;
+            }
+        } catch (Exception e) {
+            CopilotLogger.warn("npx check failed: " + e.getMessage());
+        }
+        return false;
+    }
+    
+    private boolean tryNPXConnection(McpServerManager manager) {
+        try {
+            com.fabrix.copilot.mcp.McpServerConfig fsConfig = new com.fabrix.copilot.mcp.McpServerConfig(
+                "filesystem-mcp-npx",
+                "stdio",
+                "npx",
+                Arrays.asList("--yes", "@modelcontextprotocol/server-filesystem", System.getProperty("user.home")),
+                new HashMap<>(),
+                1
+            );
+            
+            if (manager.addServer(fsConfig)) {
+                addMessage("🔌 파일시스템 MCP 서버가 npx로 연결되었습니다.", false);
+                return true;
+            }
+        } catch (Exception e) {
+            CopilotLogger.warn("NPX connection failed: " + e.getMessage());
+        }
+        return false;
+    }
+    
+    private boolean tryGlobalInstallation(McpServerManager manager) {
+        try {
+            // npm 글로벌 경로 찾기
+            String npmPrefix = getNPMPrefix();
+            if (npmPrefix != null) {
+                String serverPath = npmPrefix + "/lib/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js";
+                java.io.File file = new java.io.File(serverPath);
+                
+                if (file.exists()) {
+                    com.fabrix.copilot.mcp.McpServerConfig fsConfig = new com.fabrix.copilot.mcp.McpServerConfig(
+                        "filesystem-mcp-global",
+                        "stdio",
+                        "node",
+                        Arrays.asList(serverPath, System.getProperty("user.home")),
+                        new HashMap<>(),
+                        1
+                    );
+                    
+                    if (manager.addServer(fsConfig)) {
+                        addMessage("🔌 파일시스템 MCP 서버가 글로벌 설치에서 연결되었습니다.", false);
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            CopilotLogger.warn("Global installation check failed: " + e.getMessage());
+        }
+        return false;
+    }
+    
+    private boolean tryLocalInstallation(McpServerManager manager) {
+        try {
+            String[] possiblePaths = {
+                "./node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
+                "../node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
+                System.getProperty("user.home") + "/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js"
+            };
+            
+            for (String path : possiblePaths) {
+                java.io.File file = new java.io.File(path);
+                if (file.exists()) {
+                    com.fabrix.copilot.mcp.McpServerConfig fsConfig = new com.fabrix.copilot.mcp.McpServerConfig(
+                        "filesystem-mcp-local",
+                        "stdio",
+                        "node",
+                        Arrays.asList(file.getAbsolutePath(), System.getProperty("user.home")),
+                        new HashMap<>(),
+                        1
+                    );
+                    
+                    if (manager.addServer(fsConfig)) {
+                        addMessage("🔌 파일시스템 MCP 서버가 로컬 설치에서 연결되었습니다.", false);
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            CopilotLogger.warn("Local installation check failed: " + e.getMessage());
+        }
+        return false;
+    }
+    
+    private String getNPMPrefix() {
+        try {
+            ProcessBuilder pb = new ProcessBuilder();
+            String os = System.getProperty("os.name").toLowerCase();
+            
+            if (os.contains("win")) {
+                pb.command("cmd", "/c", "npm", "config", "get", "prefix");
+            } else {
+                pb.command("sh", "-c", "npm config get prefix");
+            }
+            
+            Process process = pb.start();
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(process.getInputStream()))) {
+                String prefix = reader.readLine();
+                if (prefix != null && !prefix.isEmpty()) {
+                    return prefix.trim();
+                }
+            }
+        } catch (Exception e) {
+            CopilotLogger.warn("Failed to get npm prefix: " + e.getMessage());
+        }
+        return null;
+    }
+    
+    // Shell 가져오기 헬퍼 메서드
+    private Shell getShell() {
+        return getSite().getShell();
     }
     
     @Override
