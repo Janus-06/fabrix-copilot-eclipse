@@ -2,6 +2,7 @@ package com.fabrix.copilot.agents;
 
 import com.fabrix.copilot.core.LLMClient;
 import com.fabrix.copilot.utils.PreferenceManager;
+import com.fabrix.copilot.mcp.McpServerManager;
 
 /**
  * 🔌 McpAgent - MCP(Model Context Protocol) 전문 에이전트
@@ -29,14 +30,15 @@ public class McpAgent {
     private void initializeMCPConnection() {
         try {
             if (preferenceManager.isMCPEnabled()) {
+                // 실제로 연결된 MCP 서버 수 확인
+                McpServerManager.McpStatus status = McpServerManager.getInstance().getStatus();
+                this.mcpConnected = status.getConnectedServers() > 0;
                 this.mcpServerUrl = preferenceManager.getMCPFullUrl();
-                // 실제 연결 테스트 로직은 McpServerManager 등으로 이전하는 것이 좋지만, 여기서는 구조를 유지합니다.
-                this.mcpConnected = true; // 간단히 true로 설정
-                
+
                 if (mcpConnected) {
-                    System.out.println("✅ MCP is enabled: " + mcpServerUrl);
+                    System.out.println("✅ MCP is enabled and connected: " + mcpServerUrl);
                 } else {
-                    System.out.println("❌ MCP connection failed: " + mcpServerUrl);
+                    System.out.println("❌ MCP is enabled but no servers are connected: " + mcpServerUrl);
                 }
             } else {
                 System.out.println("ℹ️ MCP is disabled in settings.");

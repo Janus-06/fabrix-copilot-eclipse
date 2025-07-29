@@ -308,28 +308,52 @@ public class ChatView extends ViewPart {
     }
     
     private void createInputText() {
-        inputText = new StyledText(inputComposite, SWT.BORDER | SWT.WRAP | SWT.V_SCROLL);
-        inputText.setBackground(Display.getDefault().getSystemColor(SWT.COLOR_WHITE));
-        inputText.setFont(new Font(Display.getDefault(), "Segoe UI", 10, SWT.NORMAL));
-        inputText.setWordWrap(true);
+        // 입력 영역을 카드 스타일로 변경
+        Composite inputCard = new Composite(inputComposite, SWT.NONE);
+        inputCard.setBackground(Display.getDefault().getSystemColor(SWT.COLOR_WHITE));
+        inputCard.setLayout(new GridLayout(1, false));
         
-        GridData inputData = new GridData(SWT.FILL, SWT.FILL, true, true);
-        inputData.heightHint = 60;
-        inputText.setLayoutData(inputData);
-        inputText.setMargins(10, 10, 10, 10);
+        GridData cardData = new GridData(SWT.FILL, SWT.FILL, true, true);
+        cardData.minimumHeight = 80;
+        cardData.heightHint = 100;
+        inputCard.setLayoutData(cardData);
         
-        // 플레이스홀더 제거
+        // 둥근 모서리 효과
+        inputCard.addPaintListener(e -> {
+            Rectangle bounds = inputCard.getBounds();
+            e.gc.setForeground(Display.getDefault().getSystemColor(SWT.COLOR_GRAY));
+            e.gc.drawRoundRectangle(0, 0, bounds.width-1, bounds.height-1, 10, 10);
+        });
+        
+        inputText = new StyledText(inputCard, SWT.WRAP | SWT.V_SCROLL);
+        inputText.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+        inputText.setMargins(15, 15, 15, 15);
+        inputText.setFont(new Font(Display.getDefault(), "Segoe UI", 11, SWT.NORMAL));
+        
+        // 플레이스홀더 설정
+        resetInputText();
+        
         inputText.addFocusListener(new FocusAdapter() {
             @Override
             public void focusGained(FocusEvent e) {
-                if (inputText.getText().equals("질문을 입력하세요...")) {
+                if (inputText.getText().equals("💭 무엇을 도와드릴까요? (Ctrl+Enter로 전송)")) {
                     inputText.setText("");
+                    inputText.setForeground(Display.getDefault().getSystemColor(SWT.COLOR_BLACK));
+                }
+            }
+            
+            @Override
+            public void focusLost(FocusEvent e) {
+                if (inputText.getText().trim().isEmpty()) {
+                    resetInputText();
                 }
             }
         });
         
+        // 문자 수 업데이트
         inputText.addModifyListener(e -> updateCharacterCount());
         
+        // Ctrl+Enter로 전송
         inputText.addKeyListener(new KeyAdapter() {
             @Override
             public void keyPressed(KeyEvent e) {
@@ -339,6 +363,67 @@ public class ChatView extends ViewPart {
                 }
             }
         });
+    }
+    
+    public class MessageBubble extends Composite {
+        private void createContents() {
+            // 그림자 효과를 위한 여백
+            GridLayout layout = new GridLayout(1, false);
+            layout.marginWidth = isUser ? 20 : 15;
+            layout.marginHeight = 15;
+            layout.marginRight = isUser ? 15 : 20;
+            setLayout(layout);
+            
+            // 아바타 추가
+            Composite avatarContainer = new Composite(this, SWT.NONE);
+            avatarContainer.setLayout(new GridLayout(2, false));
+            
+            Label avatar = new Label(avatarContainer, SWT.NONE);
+            avatar.setText(isUser ? "👤" : "🤖");
+            avatar.setFont(new Font(getDisplay(), "Segoe UI", 16, SWT.NORMAL));
+            
+            Label nameLabel = new Label(avatarContainer, SWT.NONE);
+            nameLabel.setText(isUser ? "You" : "Assistant");
+            nameLabel.setFont(new Font(getDisplay(), "Segoe UI", 10, SWT.BOLD));
+            
+            // 메시지 컨테이너
+            Composite messageContainer = new Composite(this, SWT.NONE);
+            messageContainer.setBackground(isUser ? USER_BG : AI_BG);
+            messageContainer.setLayout(new GridLayout(1, false));
+            
+            // 둥근 모서리
+            messageContainer.addPaintListener(e -> {
+                Rectangle bounds = messageContainer.getBounds();
+                e.gc.setBackground(isUser ? USER_BG : AI_BG);
+                e.gc.fillRoundRectangle(0, 0, bounds.width, bounds.height, 15, 15);
+            });
+        }
+    }
+    
+    private void createStatusBar() {
+        Composite statusBar = new Composite(mainComposite, SWT.NONE);
+        statusBar.setLayout(new GridLayout(4, false));
+        statusBar.setBackground(Display.getDefault().getSystemColor(SWT.COLOR_WIDGET_LIGHT_SHADOW));
+        
+        // AI 상태 표시
+        Label aiStatusIcon = new Label(statusBar, SWT.NONE);
+        aiStatusIcon.setText("🟢");
+        
+        Label aiStatusLabel = new Label(statusBar, SWT.NONE);
+        aiStatusLabel.setText("AI Ready");
+        
+        // MCP 상태 표시
+        Label mcpStatusIcon = new Label(statusBar, SWT.NONE);
+        mcpStatusIcon.setText(mcpConnected ? "🔌" : "🔴");
+        
+        Label mcpStatusLabel = new Label(statusBar, SWT.NONE);
+        mcpStatusLabel.setText("MCP: " + connectedTools + " tools");
+        
+        // 토큰 사용량 표시 (예상)
+        ProgressBar tokenBar = new ProgressBar(statusBar, SWT.SMOOTH);
+        tokenBar.setMaximum(maxTokens);
+        tokenBar.setSelection(estimatedTokens);
+        tokenBar.setToolTipText("Token usage: " + estimatedTokens + "/" + maxTokens);
     }
     
     private void createCodeAttachCombo() {
@@ -588,7 +673,12 @@ public class ChatView extends ViewPart {
     
     private void sendMessage() {
         String message = inputText.getText().trim();
-        if (message.isEmpty() || message.equals("질문을 입력하세요...") || isProcessing) {
+        
+        // 플레이스홀더 텍스트 체크 추가
+        if (message.isEmpty() || 
+            message.equals("질문을 입력하세요...") || 
+            message.equals("💭 무엇을 도와드릴까요? (Ctrl+Enter로 전송)") || 
+            isProcessing) {
             return;
         }
 
@@ -600,20 +690,23 @@ public class ChatView extends ViewPart {
 
         setProcessingState(true);
 
-        // 사용자에게 보이는 메시지는 원본 메시지만
+        // 사용자 메시지 표시
         addMessage("👤 " + message, true);
         conversationManager.addMessage(currentSessionId, message, true);
 
         String selectedModel = getSelectedModelId();
-        
-        // 컨텍스트 생성 (파일 코드 포함)
         String context = getCurrentContext();
         
-        // MCP 도구 요청은 MCP가 설정되어 있고, 명시적으로 요청한 경우만
+        // ReAct 프로세스 표시 여부 결정
+        boolean showReactProcess = preferenceManager.getBooleanValue("ui.show.react.process", true);
+        
         if (shouldUseMCPTool(message)) {
             executeMCPTool(message, selectedModel);
+        } else if (showReactProcess && isComplexRequest(message)) {
+            // 복잡한 요청인 경우 ReAct 프로세스 표시
+            executeWithReactProcess(message, context, selectedModel);
         } else {
-            // 일반 메시지 처리 - 컨텍스트에 첨부 파일 내용 포함
+            // 일반 메시지 처리
             agentOrchestrator.processComplexRequestAsync(message, context, selectedModel,
                 response -> {
                     Display.getDefault().asyncExec(() -> {
@@ -621,10 +714,14 @@ public class ChatView extends ViewPart {
                         addMessage("🤖 " + response, false);
                         conversationManager.addMessage(currentSessionId, response, false);
                         setProcessingState(false);
-                        inputText.setText("");
                         
-                        // 첨부 파일은 유지 (Copilot처럼)
-                        // clearAttachedCode(); // 제거
+                        // 입력창 초기화
+                        resetInputText();
+                        
+                        // 첨부 파일은 성공 시에만 초기화
+                        if (!preferenceManager.getBooleanValue("ui.keep.attachments", false)) {
+                            clearAttachedCode();
+                        }
                     });
                 },
                 error -> {
@@ -640,6 +737,110 @@ public class ChatView extends ViewPart {
         }
     }
     
+    private void resetInputText() {
+        inputText.setForeground(Display.getDefault().getSystemColor(SWT.COLOR_GRAY));
+        inputText.setText("💭 무엇을 도와드릴까요? (Ctrl+Enter로 전송)");
+    }
+    
+    private boolean isComplexRequest(String message) {
+        String lower = message.toLowerCase();
+        return lower.contains("분석") || lower.contains("설명") || 
+               lower.contains("비교") || lower.contains("구현") ||
+               lower.contains("리팩토링") || lower.contains("최적화");
+    }
+
+    // ReAct 프로세스를 보여주며 실행
+    private void executeWithReactProcess(String message, String context, String modelId) {
+        // ReAct 프로세스 표시 버블 생성
+        ReactProcessBubble processBubble = new ReactProcessBubble(chatContent, SWT.NONE);
+        processBubble.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
+        
+        // 레이아웃 업데이트
+        chatContent.layout();
+        scrollToBottom();
+        
+        // ReactAgent의 콜백을 구현하여 프로세스 표시
+        ReactAgent.ReactCallback callback = new ReactAgent.ReactCallback() {
+            @Override
+            public void onThought(String thought) {
+                Display.getDefault().asyncExec(() -> {
+                    if (!processBubble.isDisposed()) {
+                        processBubble.addStep("💭 분석", thought);
+                    }
+                });
+            }
+            
+            @Override
+            public void onAction(String action, String tool) {
+                Display.getDefault().asyncExec(() -> {
+                    if (!processBubble.isDisposed()) {
+                        processBubble.addStep("🔧 " + action, tool + " 사용 중...");
+                    }
+                });
+            }
+            
+            @Override
+            public void onObservation(String observation) {
+                Display.getDefault().asyncExec(() -> {
+                    if (!processBubble.isDisposed()) {
+                        processBubble.addStep("👀 관찰", observation);
+                    }
+                });
+            }
+            
+            @Override
+            public void onReflection(String reflection) {
+                Display.getDefault().asyncExec(() -> {
+                    if (!processBubble.isDisposed()) {
+                        processBubble.addStep("🤔 평가", reflection);
+                    }
+                });
+            }
+        };
+        
+        // 비동기 처리 - 수정된 버전
+        Job job = new Job("AI 처리 중...") {
+            @Override
+            protected IStatus run(IProgressMonitor monitor) {
+                try {
+                    // ReactAgent를 직접 사용하여 콜백 지원
+                    ReactAgent reactAgent = new ReactAgent();
+                    ReactAgent.ReactResponse response = reactAgent.process(
+                        message, context, currentSessionId, callback
+                    );
+                    
+                    Display.getDefault().asyncExec(() -> {
+                        if (!chatContent.isDisposed()) {
+                            processBubble.complete();
+                            addMessage("🤖 " + response.getFinalAnswer(), false);
+                            conversationManager.addMessage(currentSessionId, response.getFinalAnswer(), false);
+                            setProcessingState(false);
+                            resetInputText();
+                            
+                            if (!preferenceManager.getBooleanValue("ui.keep.attachments", false)) {
+                                clearAttachedCode();
+                            }
+                        }
+                    });
+                    
+                    return Status.OK_STATUS;
+                    
+                } catch (Exception e) {
+                    Display.getDefault().asyncExec(() -> {
+                        if (!processBubble.isDisposed()) {
+                            processBubble.error(e.getMessage());
+                        }
+                        setProcessingState(false);
+                    });
+                    
+                    return Status.error("처리 실패", e);
+                }
+            }
+        };
+        
+        job.setUser(true);
+        job.schedule();
+    }
     // MCP 도구 사용 여부 결정 - MCP가 설정되어 있고 명시적 요청인 경우만
     private boolean shouldUseMCPTool(String message) {
         // MCP 서버가 연결되어 있는지 확인
@@ -675,28 +876,28 @@ public class ChatView extends ViewPart {
         }
         
         agentOrchestrator.processComplexRequestAsync(message, mcpContext, modelId,
-            response -> {
-                Display.getDefault().asyncExec(() -> {
-                    if (chatContent.isDisposed()) return;
-                    
-                    // MCP 도구 실행 결과 표시
-                    addMessage("🔌 MCP 도구 실행 결과:\n" + response, false);
-                    conversationManager.addMessage(currentSessionId, response, false);
-                    setProcessingState(false);
-                    inputText.setText("");
-                    clearAttachedCode();
-                });
-            },
-            error -> {
-                Display.getDefault().asyncExec(() -> {
-                    if (chatContent.isDisposed()) return;
-                    String errorMessage = "❌ MCP 도구 실행 실패: " + error.getMessage();
-                    addMessage(errorMessage, false);
-                    setProcessingState(false);
-                    CopilotLogger.error("MCP tool execution failed", error);
-                });
-            }
-        );
+        	    response -> {
+        	        Display.getDefault().asyncExec(() -> {
+        	            if (chatContent.isDisposed()) return;
+        	            addMessage("🔌 MCP 도구 실행 결과:\n" + response, false);
+        	            conversationManager.addMessage(currentSessionId, response, false);
+        	            setProcessingState(false);
+        	            inputText.setText("");
+        	            clearAttachedCode();
+        	        });
+        	    },
+        	    error -> {
+        	        Display.getDefault().asyncExec(() -> {
+        	            if (chatContent.isDisposed()) return;
+        	            String errorMessage = "❌ MCP 도구 실행 실패: " + error.getMessage();
+        	            addMessage(errorMessage, false);
+        	            setProcessingState(false);
+        	            CopilotLogger.error("MCP tool execution failed", error);
+        	            // MCP 도구 실패 시에도 첨부를 정리합니다.
+        	            clearAttachedCode();
+        	        });
+        	    }
+        	);
     }
     
     private String getFileExtension(String fileName) {

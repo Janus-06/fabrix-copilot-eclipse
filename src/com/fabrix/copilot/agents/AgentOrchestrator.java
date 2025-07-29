@@ -30,70 +30,44 @@ public class AgentOrchestrator {
      * 비동기 요청 처리 메서드 - MCP 도구 감지 기능 추가
      * ChatView에서 호출할 기본 진입점입니다.
      */
-    public void processComplexRequestAsync(String userRequest, String fileContext, String modelId, 
-                                         Consumer<String> onSuccess, Consumer<Exception> onError) {
-        Job job = new Job("AI Assistant is thinking...") {
-            @Override
-            protected IStatus run(IProgressMonitor monitor) {
-                try {
-                    monitor.beginTask("에이전트 시스템 실행 중...", IProgressMonitor.UNKNOWN);
-                    
-                    CopilotLogger.info("Processing request with model: " + modelId);
-                    CopilotLogger.info("User request: " + userRequest);
-                    CopilotLogger.info("Context length: " + (fileContext != null ? fileContext.length() : 0));
-                    
-                    String enhancedContext = fileContext;
-                    if (modelId != null && !modelId.isEmpty()) {
-                        enhancedContext = "Model: " + modelId + "\n" + fileContext;
-                    }
-                    
-                    // MCP 도구 요청 감지
-                    if (isMCPToolRequest(userRequest)) {
-                        CopilotLogger.info("MCP tool request detected, routing to ReactAgent");
-                        
-                        // ReactAgent를 통해 처리 (동기 방식으로 실행 후 결과 반환)
-                        String response = processComplexRequest(userRequest, enhancedContext, modelId);
-                        
-                        // UI 스레드에서 콜백 실행
-                        org.eclipse.swt.widgets.Display.getDefault().asyncExec(() -> {
-                            onSuccess.accept(response);
-                        });
-                    } else {
-                        // 일반 LLM 요청 - 직접 처리
-                        CopilotLogger.info("General request, using direct LLM");
-                        
-                        llmClient.generateResponseAsync(userRequest, modelId, 
-                            response -> {
-                                CopilotLogger.info("Response received successfully");
-                                // UI 스레드에서 콜백 실행
-                                org.eclipse.swt.widgets.Display.getDefault().asyncExec(() -> {
-                                    onSuccess.accept(response);
-                                });
-                            },
-                            error -> {
-                                CopilotLogger.error("Response generation failed", error);
-                                // UI 스레드에서 콜백 실행
-                                org.eclipse.swt.widgets.Display.getDefault().asyncExec(() -> {
-                                    onError.accept(error);
-                                });
-                            });
-                    }
+    public void processComplexRequestAsync(String userRequest, String fileContext, String modelId,
+            Consumer<String> onSuccess, Consumer<Throwable> onError) {
+Job job = new Job("AI Assistant is thinking...") {
+@Override
+protected IStatus run(IProgressMonitor monitor) {
+try {
+monitor.beginTask("에이전트 시스템 실행 중...", IProgressMonitor.UNKNOWN);
 
-                    return Status.OK_STATUS;
-                    
-                } catch (Exception e) {
-                    CopilotLogger.error("Request processing failed", e);
-                    // UI 스레드에서 콜백 실행
-                    org.eclipse.swt.widgets.Display.getDefault().asyncExec(() -> {
-                        onError.accept(e);
-                    });
-                    return Status.error("요청 처리 중 오류가 발생했습니다.", e);
-                }
-            }
-        };
-        job.setUser(true);
-        job.schedule();
-    }
+CopilotLogger.info("Processing request with model: " + modelId);
+CopilotLogger.info("User request: " + userRequest);
+CopilotLogger.info("Context length: " + (fileContext != null ? fileContext.length() : 0));
+
+String enhancedContext = fileContext;
+if (modelId != null && !modelId.isEmpty()) {
+enhancedContext = "Model: " + modelId + "\n" + fileContext;
+}
+
+// 모든 요청을 ReactAgent 기반으로 처리
+String response = processComplexRequest(userRequest, enhancedContext, modelId);
+
+org.eclipse.swt.widgets.Display.getDefault().asyncExec(() -> {
+onSuccess.accept(response);
+});
+
+return Status.OK_STATUS;
+} catch (Exception e) {
+CopilotLogger.error("Request processing failed", e);
+org.eclipse.swt.widgets.Display.getDefault().asyncExec(() -> {
+onError.accept(e);
+});
+return Status.error("요청 처리 중 오류가 발생했습니다.", e);
+}
+}
+};
+job.setUser(true);
+job.schedule();
+}
+
     
     /**
      * MCP 도구 요청인지 감지

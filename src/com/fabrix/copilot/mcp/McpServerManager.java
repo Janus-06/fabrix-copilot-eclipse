@@ -12,6 +12,9 @@ import java.util.stream.Collectors;
 import com.fabrix.copilot.utils.CopilotLogger;
 import com.fabrix.copilot.utils.PreferenceManager;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 /**
  * 🔌 MCP Server Manager - MCP 서버 관리
  * 
@@ -96,17 +99,49 @@ public class McpServerManager {
         try {
             PreferenceManager prefs = PreferenceManager.getInstance();
             String configJson = prefs.getValue("mcp.config.json", "");
+            
             if (!configJson.isEmpty() && !configJson.equals("{}")) {
-                CopilotLogger.info("Local MCP configuration found, setting up default server for now.");
-                setupDefaultLocalMCP();
+                CopilotLogger.info("Parsing MCP configuration from JSON...");
+                
+                // JSON 파싱 추가
+                JSONObject config = new JSONObject(configJson);
+                JSONArray servers = config.optJSONArray("mcpServers");
+                
+                if (servers != null) {
+                    for (int i = 0; i < servers.length(); i++) {
+                        JSONObject serverConfig = servers.getJSONObject(i);
+                        
+                        McpServerConfig mcpConfig = new McpServerConfig(
+                            serverConfig.getString("name"),
+                            serverConfig.optString("type", "stdio"),
+                            serverConfig.getString("command"),
+                            parseArgs(serverConfig.optJSONArray("args")),
+                            parseEnv(serverConfig.optJSONObject("env")),
+                            serverConfig.optInt("priority", 1)
+                        );
+                        
+                        addServer(mcpConfig);
+                    }
+                }
             } else {
-                CopilotLogger.info("No local MCP configuration found.");
+                // 기본 설정 사용
+                setupDefaultLocalMCP();
             }
         } catch (Exception e) {
-            CopilotLogger.error("❌ Failed to load local MCP config", e);
+            CopilotLogger.error("Failed to load MCP config from JSON", e);
+            setupDefaultLocalMCP();
         }
     }
 
+ // OS별 npx 실행 처리
+    private String getNpxCommand() {
+        String os = System.getProperty("os.name").toLowerCase();
+        if (os.contains("win")) {
+            return "npx.cmd"; // Windows
+        }
+        return "npx"; // Mac/Linux
+    }
+    
     /**
      * 기본 로컬 MCP 설정
      */
