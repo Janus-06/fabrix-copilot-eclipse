@@ -91,6 +91,201 @@ public class ChatView extends ViewPart {
     private String attachedCode = "";
     private String attachedFileName = "";
     
+    // 내부 클래스 - MessageBubble
+    private class MessageBubble extends Composite {
+        private StyledText messageText;
+        private Label timestampLabel;
+        private boolean isUser;
+        
+        // 색상 상수
+        private static final Color USER_BG = null; // 시스템 색상 사용
+        private static final Color AI_BG = null;   // 시스템 색상 사용
+        
+        public MessageBubble(Composite parent, int style) {
+            super(parent, style);
+            createContents();
+        }
+        
+        private void createContents() {
+            GridLayout layout = new GridLayout(1, false);
+            layout.marginWidth = 10;
+            layout.marginHeight = 10;
+            layout.verticalSpacing = 5;
+            setLayout(layout);
+            
+            // 메시지 텍스트
+            messageText = new StyledText(this, SWT.WRAP | SWT.READ_ONLY);
+            messageText.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+            messageText.setCaret(null);
+            messageText.setEditable(false);
+            
+            // 타임스탬프
+            timestampLabel = new Label(this, SWT.NONE);
+            timestampLabel.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, true, false));
+            timestampLabel.setFont(new Font(getDisplay(), "Segoe UI", 8, SWT.NORMAL));
+            timestampLabel.setForeground(getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY));
+        }
+        
+        public void setMessage(String content, boolean isUser) {
+            this.isUser = isUser;
+            
+            // 배경색 설정 - 시스템 색상 사용
+            Color bgColor = isUser ? 
+                new Color(getDisplay(), 220, 240, 255) : // 연한 파란색
+                new Color(getDisplay(), 240, 240, 240);   // 연한 회색
+            Color fgColor = getDisplay().getSystemColor(SWT.COLOR_BLACK);
+            
+            setBackground(bgColor);
+            messageText.setBackground(bgColor);
+            messageText.setForeground(fgColor);
+            timestampLabel.setBackground(bgColor);
+            
+            // 메시지 처리
+            String processedContent = processMessage(content);
+            messageText.setText(processedContent);
+            
+            // 마크다운 스타일 적용
+            applyMarkdownStyles(processedContent);
+            
+            // 레이아웃 업데이트
+            layout();
+            
+            // 색상 리소스 정리
+            bgColor.dispose();
+        }
+        
+        private String processMessage(String content) {
+            if (content == null) return "";
+            
+            // 이모지 제거 (사용자/AI 표시는 버블로 구분)
+            if (content.startsWith("👤 ")) {
+                content = content.substring(3);
+            } else if (content.startsWith("🤖 ")) {
+                content = content.substring(3);
+            }
+            
+            return content.trim();
+        }
+        
+        private void applyMarkdownStyles(String text) {
+            // 굵은 글씨 (**text**)
+            applyStyle(text, "\\*\\*([^*]+)\\*\\*", SWT.BOLD);
+            
+            // 이탤릭 (*text*)
+            applyStyle(text, "(?<!\\*)\\*([^*]+)\\*(?!\\*)", SWT.ITALIC);
+            
+            // 코드 블록 (```code```)
+            applyCodeBlockStyle(text);
+            
+            // 인라인 코드 (`code`)
+            applyInlineCodeStyle(text);
+            
+            // 헤더 (### Header)
+            applyHeaderStyle(text);
+        }
+        
+        private void applyStyle(String text, String pattern, int style) {
+            try {
+                java.util.regex.Pattern p = java.util.regex.Pattern.compile(pattern);
+                java.util.regex.Matcher m = p.matcher(text);
+                
+                while (m.find()) {
+                    StyleRange range = new StyleRange();
+                    range.start = m.start();
+                    range.length = m.end() - m.start();
+                    range.fontStyle = style;
+                    messageText.setStyleRange(range);
+                }
+            } catch (Exception e) {
+                // 스타일 적용 실패 무시
+            }
+        }
+        
+        private void applyCodeBlockStyle(String text) {
+            try {
+                java.util.regex.Pattern p = java.util.regex.Pattern.compile("```([^`]+)```", java.util.regex.Pattern.DOTALL);
+                java.util.regex.Matcher m = p.matcher(text);
+                
+                while (m.find()) {
+                    StyleRange range = new StyleRange();
+                    range.start = m.start();
+                    range.length = m.end() - m.start();
+                    range.background = new Color(getDisplay(), 245, 245, 245);
+                    range.font = new Font(getDisplay(), "Consolas", 9, SWT.NORMAL);
+                    messageText.setStyleRange(range);
+                }
+            } catch (Exception e) {
+                // 스타일 적용 실패 무시
+            }
+        }
+        
+        private void applyInlineCodeStyle(String text) {
+            try {
+                java.util.regex.Pattern p = java.util.regex.Pattern.compile("`([^`]+)`");
+                java.util.regex.Matcher m = p.matcher(text);
+                
+                while (m.find()) {
+                    StyleRange range = new StyleRange();
+                    range.start = m.start();
+                    range.length = m.end() - m.start();
+                    range.background = new Color(getDisplay(), 245, 245, 245);
+                    range.font = new Font(getDisplay(), "Consolas", 9, SWT.NORMAL);
+                    messageText.setStyleRange(range);
+                }
+            } catch (Exception e) {
+                // 스타일 적용 실패 무시
+            }
+        }
+        
+        private void applyHeaderStyle(String text) {
+            try {
+                String[] lines = text.split("\n");
+                int offset = 0;
+                
+                for (String line : lines) {
+                    if (line.startsWith("###")) {
+                        StyleRange range = new StyleRange();
+                        range.start = offset;
+                        range.length = line.length();
+                        range.fontStyle = SWT.BOLD;
+                        range.font = new Font(getDisplay(), "Segoe UI", 11, SWT.BOLD);
+                        messageText.setStyleRange(range);
+                    } else if (line.startsWith("##")) {
+                        StyleRange range = new StyleRange();
+                        range.start = offset;
+                        range.length = line.length();
+                        range.fontStyle = SWT.BOLD;
+                        range.font = new Font(getDisplay(), "Segoe UI", 12, SWT.BOLD);
+                        messageText.setStyleRange(range);
+                    } else if (line.startsWith("#")) {
+                        StyleRange range = new StyleRange();
+                        range.start = offset;
+                        range.length = line.length();
+                        range.fontStyle = SWT.BOLD;
+                        range.font = new Font(getDisplay(), "Segoe UI", 14, SWT.BOLD);
+                        messageText.setStyleRange(range);
+                    }
+                    
+                    offset += line.length() + 1; // +1 for newline
+                }
+            } catch (Exception e) {
+                // 스타일 적용 실패 무시
+            }
+        }
+        
+        public void setTimestamp(String timestamp) {
+            if (timestampLabel != null && !timestampLabel.isDisposed()) {
+                timestampLabel.setText(timestamp);
+            }
+        }
+        
+        @Override
+        public void dispose() {
+            // 동적으로 생성된 리소스만 정리
+            super.dispose();
+        }
+    }
+
     @Override
     public void createPartControl(Composite parent) {
         parent.setLayout(new GridLayout(1, false));
@@ -308,52 +503,28 @@ public class ChatView extends ViewPart {
     }
     
     private void createInputText() {
-        // 입력 영역을 카드 스타일로 변경
-        Composite inputCard = new Composite(inputComposite, SWT.NONE);
-        inputCard.setBackground(Display.getDefault().getSystemColor(SWT.COLOR_WHITE));
-        inputCard.setLayout(new GridLayout(1, false));
+        inputText = new StyledText(inputComposite, SWT.BORDER | SWT.WRAP | SWT.V_SCROLL);
+        inputText.setBackground(Display.getDefault().getSystemColor(SWT.COLOR_WHITE));
+        inputText.setFont(new Font(Display.getDefault(), "Segoe UI", 10, SWT.NORMAL));
+        inputText.setWordWrap(true);
         
-        GridData cardData = new GridData(SWT.FILL, SWT.FILL, true, true);
-        cardData.minimumHeight = 80;
-        cardData.heightHint = 100;
-        inputCard.setLayoutData(cardData);
+        GridData inputData = new GridData(SWT.FILL, SWT.FILL, true, true);
+        inputData.heightHint = 60;
+        inputText.setLayoutData(inputData);
+        inputText.setMargins(10, 10, 10, 10);
         
-        // 둥근 모서리 효과
-        inputCard.addPaintListener(e -> {
-            Rectangle bounds = inputCard.getBounds();
-            e.gc.setForeground(Display.getDefault().getSystemColor(SWT.COLOR_GRAY));
-            e.gc.drawRoundRectangle(0, 0, bounds.width-1, bounds.height-1, 10, 10);
-        });
-        
-        inputText = new StyledText(inputCard, SWT.WRAP | SWT.V_SCROLL);
-        inputText.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
-        inputText.setMargins(15, 15, 15, 15);
-        inputText.setFont(new Font(Display.getDefault(), "Segoe UI", 11, SWT.NORMAL));
-        
-        // 플레이스홀더 설정
-        resetInputText();
-        
+        // 플레이스홀더 제거
         inputText.addFocusListener(new FocusAdapter() {
             @Override
             public void focusGained(FocusEvent e) {
-                if (inputText.getText().equals("💭 무엇을 도와드릴까요? (Ctrl+Enter로 전송)")) {
+                if (inputText.getText().equals("질문을 입력하세요...")) {
                     inputText.setText("");
-                    inputText.setForeground(Display.getDefault().getSystemColor(SWT.COLOR_BLACK));
-                }
-            }
-            
-            @Override
-            public void focusLost(FocusEvent e) {
-                if (inputText.getText().trim().isEmpty()) {
-                    resetInputText();
                 }
             }
         });
         
-        // 문자 수 업데이트
         inputText.addModifyListener(e -> updateCharacterCount());
         
-        // Ctrl+Enter로 전송
         inputText.addKeyListener(new KeyAdapter() {
             @Override
             public void keyPressed(KeyEvent e) {
@@ -363,67 +534,6 @@ public class ChatView extends ViewPart {
                 }
             }
         });
-    }
-    
-    public class MessageBubble extends Composite {
-        private void createContents() {
-            // 그림자 효과를 위한 여백
-            GridLayout layout = new GridLayout(1, false);
-            layout.marginWidth = isUser ? 20 : 15;
-            layout.marginHeight = 15;
-            layout.marginRight = isUser ? 15 : 20;
-            setLayout(layout);
-            
-            // 아바타 추가
-            Composite avatarContainer = new Composite(this, SWT.NONE);
-            avatarContainer.setLayout(new GridLayout(2, false));
-            
-            Label avatar = new Label(avatarContainer, SWT.NONE);
-            avatar.setText(isUser ? "👤" : "🤖");
-            avatar.setFont(new Font(getDisplay(), "Segoe UI", 16, SWT.NORMAL));
-            
-            Label nameLabel = new Label(avatarContainer, SWT.NONE);
-            nameLabel.setText(isUser ? "You" : "Assistant");
-            nameLabel.setFont(new Font(getDisplay(), "Segoe UI", 10, SWT.BOLD));
-            
-            // 메시지 컨테이너
-            Composite messageContainer = new Composite(this, SWT.NONE);
-            messageContainer.setBackground(isUser ? USER_BG : AI_BG);
-            messageContainer.setLayout(new GridLayout(1, false));
-            
-            // 둥근 모서리
-            messageContainer.addPaintListener(e -> {
-                Rectangle bounds = messageContainer.getBounds();
-                e.gc.setBackground(isUser ? USER_BG : AI_BG);
-                e.gc.fillRoundRectangle(0, 0, bounds.width, bounds.height, 15, 15);
-            });
-        }
-    }
-    
-    private void createStatusBar() {
-        Composite statusBar = new Composite(mainComposite, SWT.NONE);
-        statusBar.setLayout(new GridLayout(4, false));
-        statusBar.setBackground(Display.getDefault().getSystemColor(SWT.COLOR_WIDGET_LIGHT_SHADOW));
-        
-        // AI 상태 표시
-        Label aiStatusIcon = new Label(statusBar, SWT.NONE);
-        aiStatusIcon.setText("🟢");
-        
-        Label aiStatusLabel = new Label(statusBar, SWT.NONE);
-        aiStatusLabel.setText("AI Ready");
-        
-        // MCP 상태 표시
-        Label mcpStatusIcon = new Label(statusBar, SWT.NONE);
-        mcpStatusIcon.setText(mcpConnected ? "🔌" : "🔴");
-        
-        Label mcpStatusLabel = new Label(statusBar, SWT.NONE);
-        mcpStatusLabel.setText("MCP: " + connectedTools + " tools");
-        
-        // 토큰 사용량 표시 (예상)
-        ProgressBar tokenBar = new ProgressBar(statusBar, SWT.SMOOTH);
-        tokenBar.setMaximum(maxTokens);
-        tokenBar.setSelection(estimatedTokens);
-        tokenBar.setToolTipText("Token usage: " + estimatedTokens + "/" + maxTokens);
     }
     
     private void createCodeAttachCombo() {
@@ -673,12 +783,7 @@ public class ChatView extends ViewPart {
     
     private void sendMessage() {
         String message = inputText.getText().trim();
-        
-        // 플레이스홀더 텍스트 체크 추가
-        if (message.isEmpty() || 
-            message.equals("질문을 입력하세요...") || 
-            message.equals("💭 무엇을 도와드릴까요? (Ctrl+Enter로 전송)") || 
-            isProcessing) {
+        if (message.isEmpty() || message.equals("질문을 입력하세요...") || isProcessing) {
             return;
         }
 
@@ -690,23 +795,20 @@ public class ChatView extends ViewPart {
 
         setProcessingState(true);
 
-        // 사용자 메시지 표시
+        // 사용자에게 보이는 메시지는 원본 메시지만
         addMessage("👤 " + message, true);
         conversationManager.addMessage(currentSessionId, message, true);
 
         String selectedModel = getSelectedModelId();
+        
+        // 컨텍스트 생성 (파일 코드 포함)
         String context = getCurrentContext();
         
-        // ReAct 프로세스 표시 여부 결정
-        boolean showReactProcess = preferenceManager.getBooleanValue("ui.show.react.process", true);
-        
+        // MCP 도구 요청은 MCP가 설정되어 있고, 명시적으로 요청한 경우만
         if (shouldUseMCPTool(message)) {
             executeMCPTool(message, selectedModel);
-        } else if (showReactProcess && isComplexRequest(message)) {
-            // 복잡한 요청인 경우 ReAct 프로세스 표시
-            executeWithReactProcess(message, context, selectedModel);
         } else {
-            // 일반 메시지 처리
+            // 일반 메시지 처리 - 컨텍스트에 첨부 파일 내용 포함
             agentOrchestrator.processComplexRequestAsync(message, context, selectedModel,
                 response -> {
                     Display.getDefault().asyncExec(() -> {
@@ -714,14 +816,10 @@ public class ChatView extends ViewPart {
                         addMessage("🤖 " + response, false);
                         conversationManager.addMessage(currentSessionId, response, false);
                         setProcessingState(false);
+                        inputText.setText("");
                         
-                        // 입력창 초기화
-                        resetInputText();
-                        
-                        // 첨부 파일은 성공 시에만 초기화
-                        if (!preferenceManager.getBooleanValue("ui.keep.attachments", false)) {
-                            clearAttachedCode();
-                        }
+                        // 첨부 파일은 유지 (Copilot처럼)
+                        // clearAttachedCode(); // 제거
                     });
                 },
                 error -> {
@@ -737,110 +835,6 @@ public class ChatView extends ViewPart {
         }
     }
     
-    private void resetInputText() {
-        inputText.setForeground(Display.getDefault().getSystemColor(SWT.COLOR_GRAY));
-        inputText.setText("💭 무엇을 도와드릴까요? (Ctrl+Enter로 전송)");
-    }
-    
-    private boolean isComplexRequest(String message) {
-        String lower = message.toLowerCase();
-        return lower.contains("분석") || lower.contains("설명") || 
-               lower.contains("비교") || lower.contains("구현") ||
-               lower.contains("리팩토링") || lower.contains("최적화");
-    }
-
-    // ReAct 프로세스를 보여주며 실행
-    private void executeWithReactProcess(String message, String context, String modelId) {
-        // ReAct 프로세스 표시 버블 생성
-        ReactProcessBubble processBubble = new ReactProcessBubble(chatContent, SWT.NONE);
-        processBubble.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
-        
-        // 레이아웃 업데이트
-        chatContent.layout();
-        scrollToBottom();
-        
-        // ReactAgent의 콜백을 구현하여 프로세스 표시
-        ReactAgent.ReactCallback callback = new ReactAgent.ReactCallback() {
-            @Override
-            public void onThought(String thought) {
-                Display.getDefault().asyncExec(() -> {
-                    if (!processBubble.isDisposed()) {
-                        processBubble.addStep("💭 분석", thought);
-                    }
-                });
-            }
-            
-            @Override
-            public void onAction(String action, String tool) {
-                Display.getDefault().asyncExec(() -> {
-                    if (!processBubble.isDisposed()) {
-                        processBubble.addStep("🔧 " + action, tool + " 사용 중...");
-                    }
-                });
-            }
-            
-            @Override
-            public void onObservation(String observation) {
-                Display.getDefault().asyncExec(() -> {
-                    if (!processBubble.isDisposed()) {
-                        processBubble.addStep("👀 관찰", observation);
-                    }
-                });
-            }
-            
-            @Override
-            public void onReflection(String reflection) {
-                Display.getDefault().asyncExec(() -> {
-                    if (!processBubble.isDisposed()) {
-                        processBubble.addStep("🤔 평가", reflection);
-                    }
-                });
-            }
-        };
-        
-        // 비동기 처리 - 수정된 버전
-        Job job = new Job("AI 처리 중...") {
-            @Override
-            protected IStatus run(IProgressMonitor monitor) {
-                try {
-                    // ReactAgent를 직접 사용하여 콜백 지원
-                    ReactAgent reactAgent = new ReactAgent();
-                    ReactAgent.ReactResponse response = reactAgent.process(
-                        message, context, currentSessionId, callback
-                    );
-                    
-                    Display.getDefault().asyncExec(() -> {
-                        if (!chatContent.isDisposed()) {
-                            processBubble.complete();
-                            addMessage("🤖 " + response.getFinalAnswer(), false);
-                            conversationManager.addMessage(currentSessionId, response.getFinalAnswer(), false);
-                            setProcessingState(false);
-                            resetInputText();
-                            
-                            if (!preferenceManager.getBooleanValue("ui.keep.attachments", false)) {
-                                clearAttachedCode();
-                            }
-                        }
-                    });
-                    
-                    return Status.OK_STATUS;
-                    
-                } catch (Exception e) {
-                    Display.getDefault().asyncExec(() -> {
-                        if (!processBubble.isDisposed()) {
-                            processBubble.error(e.getMessage());
-                        }
-                        setProcessingState(false);
-                    });
-                    
-                    return Status.error("처리 실패", e);
-                }
-            }
-        };
-        
-        job.setUser(true);
-        job.schedule();
-    }
     // MCP 도구 사용 여부 결정 - MCP가 설정되어 있고 명시적 요청인 경우만
     private boolean shouldUseMCPTool(String message) {
         // MCP 서버가 연결되어 있는지 확인
@@ -876,28 +870,28 @@ public class ChatView extends ViewPart {
         }
         
         agentOrchestrator.processComplexRequestAsync(message, mcpContext, modelId,
-        	    response -> {
-        	        Display.getDefault().asyncExec(() -> {
-        	            if (chatContent.isDisposed()) return;
-        	            addMessage("🔌 MCP 도구 실행 결과:\n" + response, false);
-        	            conversationManager.addMessage(currentSessionId, response, false);
-        	            setProcessingState(false);
-        	            inputText.setText("");
-        	            clearAttachedCode();
-        	        });
-        	    },
-        	    error -> {
-        	        Display.getDefault().asyncExec(() -> {
-        	            if (chatContent.isDisposed()) return;
-        	            String errorMessage = "❌ MCP 도구 실행 실패: " + error.getMessage();
-        	            addMessage(errorMessage, false);
-        	            setProcessingState(false);
-        	            CopilotLogger.error("MCP tool execution failed", error);
-        	            // MCP 도구 실패 시에도 첨부를 정리합니다.
-        	            clearAttachedCode();
-        	        });
-        	    }
-        	);
+            response -> {
+                Display.getDefault().asyncExec(() -> {
+                    if (chatContent.isDisposed()) return;
+                    
+                    // MCP 도구 실행 결과 표시
+                    addMessage("🔌 MCP 도구 실행 결과:\n" + response, false);
+                    conversationManager.addMessage(currentSessionId, response, false);
+                    setProcessingState(false);
+                    inputText.setText("");
+                    clearAttachedCode();
+                });
+            },
+            error -> {
+                Display.getDefault().asyncExec(() -> {
+                    if (chatContent.isDisposed()) return;
+                    String errorMessage = "❌ MCP 도구 실행 실패: " + error.getMessage();
+                    addMessage(errorMessage, false);
+                    setProcessingState(false);
+                    CopilotLogger.error("MCP tool execution failed", error);
+                });
+            }
+        );
     }
     
     private String getFileExtension(String fileName) {

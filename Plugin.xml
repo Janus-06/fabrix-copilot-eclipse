@@ -1,69 +1,82 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <?eclipse version="3.4"?>
 <plugin>
-   <!-- 뷰 등록 -->
-   <extension point="org.eclipse.ui.views">
+   <!-- View Extension -->
+   <extension
+         point="org.eclipse.ui.views">
       <category
-            id="com.fabrix.copilot.category"
-            name="FabriX Copilot"/>
+            name="FabriX Copilot"
+            id="com.fabrix.copilot">
+      </category>
       <view
-            category="com.fabrix.copilot.category"
-            class="com.fabrix.copilot.ui.ChatView"
-            id="com.fabrix.copilot.views.chatView"
             name="FabriX Chat"
-            restorable="true"/>
+            icon="icons/sample.gif"
+            category="com.fabrix.copilot"
+            class="com.fabrix.copilot.ui.ChatView"
+            id="com.fabrix.copilot.views.chatView">
+      </view>
    </extension>
    
-   <!-- 메뉴 등록 -->
-   <extension point="org.eclipse.ui.menus">
-      <menuContribution locationURI="menu:org.eclipse.ui.main.menu?after=help">
-         <menu id="com.fabrix.copilot.menu" label="FabriX Copilot">
-            <command
-                  commandId="com.fabrix.copilot.commands.openChat"
-                  label="채팅 윈도우 열기"
-                  style="push"/>
-         </menu>
-      </menuContribution>
-      
-      <!-- 툴바에도 추가 -->
-      <menuContribution locationURI="toolbar:org.eclipse.ui.main.toolbar?after=additions">
-         <toolbar id="com.fabrix.copilot.toolbar">
-            <command
-                  commandId="com.fabrix.copilot.commands.openChat"
-                  label="FabriX Chat"
-                  tooltip="FabriX Copilot 채팅 열기"
-                  style="push"/>
-         </toolbar>
-      </menuContribution>
+   <!-- Perspective Extension -->
+   <extension
+         point="org.eclipse.ui.perspectiveExtensions">
+      <perspectiveExtension
+            targetID="org.eclipse.jdt.ui.JavaPerspective">
+         <view
+               ratio="0.5"
+               relative="org.eclipse.ui.views.TaskList"
+               relationship="right"
+               id="com.fabrix.copilot.views.chatView">
+         </view>
+      </perspectiveExtension>
    </extension>
    
-   <!-- 명령어 등록 -->
-   <extension point="org.eclipse.ui.commands">
+   <!-- Commands -->
+   <extension
+         point="org.eclipse.ui.commands">
+      <category
+            name="FabriX Copilot"
+            id="com.fabrix.copilot.commands.category">
+      </category>
       <command
-            id="com.fabrix.copilot.commands.openChat"
-            name="Open FabriX Chat"/>
+            name="Open Chat"
+            categoryId="com.fabrix.copilot.commands.category"
+            id="com.fabrix.copilot.commands.openChat">
+      </command>
    </extension>
    
-   <extension point="org.eclipse.ui.handlers">
+   <!-- Handlers -->
+   <extension
+         point="org.eclipse.ui.handlers">
       <handler
-            class="com.fabrix.copilot.handlers.OpenChatHandler"
-            commandId="com.fabrix.copilot.commands.openChat"/>
+            commandId="com.fabrix.copilot.commands.openChat"
+            class="com.fabrix.copilot.handlers.OpenChatHandler">
+      </handler>
    </extension>
    
-   <!-- 설정 페이지 등록 -->
-   <extension point="org.eclipse.ui.preferencePages">
-      <page
-            class="com.fabrix.copilot.ui.FabriXPreferencePage"
-            id="com.fabrix.copilot.preferences"
-            name="FabriX Copilot"/>
-   </extension>
-   
-   <!-- 키보드 단축키 -->
-   <extension point="org.eclipse.ui.bindings">
+   <!-- Key Bindings -->
+   <extension
+         point="org.eclipse.ui.bindings">
       <key
             commandId="com.fabrix.copilot.commands.openChat"
-            contextId="org.eclipse.ui.contexts.window"
             schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
-            sequence="Ctrl+Alt+F"/>
+            sequence="M1+M3+F">
+      </key>
+   </extension>
+   
+   <!-- Menu Contributions -->
+   <extension
+         point="org.eclipse.ui.menus">
+      <menuContribution
+            locationURI="menu:org.eclipse.ui.main.menu?after=additions">
+         <menu
+               label="FabriX Copilot"
+               id="com.fabrix.copilot.menus.main">
+            <command
+                  commandId="com.fabrix.copilot.commands.openChat"
+                  style="push">
+            </command>
+         </menu>
+      </menuContribution>
    </extension>
 </plugin>

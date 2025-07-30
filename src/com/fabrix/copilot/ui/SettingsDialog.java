@@ -20,6 +20,12 @@ import org.eclipse.swt.widgets.Scale;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 
+import org.eclipse.swt.widgets.Display;
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.Job;
+
 import com.fabrix.copilot.mcp.McpServerManager;
 import com.fabrix.copilot.utils.PreferenceManager;
 
@@ -295,12 +301,53 @@ public class SettingsDialog extends Dialog {
 
     private void testLocalMCP() {
         updateMCPStatus("Reloading and testing MCP servers...", SWT.COLOR_BLUE);
-        applyMCPConfig(); // 먼저 저장 및 적용
-        mcpServerManager.refreshServers();
-        McpServerManager.McpStatus status = mcpServerManager.getStatus();
-        String statusText = String.format("Test complete: %d out of %d servers connected.", 
-            status.getConnectedServers(), status.getTotalServers());
-        updateMCPStatus(statusText, SWT.COLOR_DARK_GREEN);
+        
+        // Job을 사용하여 비동기 실행
+        Job testJob = new Job("Testing MCP Configuration") {
+            @Override
+            protected IStatus run(IProgressMonitor monitor) {
+                try {
+                    monitor.beginTask("Testing MCP servers...", IProgressMonitor.UNKNOWN);
+                    
+                    // 설정 저장
+                    Display.getDefault().syncExec(() -> {
+                        applyMCPConfig();
+                    });
+                    
+                    // MCP 서버 새로고침
+                    mcpServerManager.refreshServers();
+                    
+                    // 잠시 대기 (서버 시작 시간)
+                    Thread.sleep(2000);
+                    
+                    // 상태 확인
+                    McpServerManager.McpStatus status = mcpServerManager.getStatus();
+                    String statusText = String.format("Test complete: %d out of %d servers connected.", 
+                        status.getConnectedServers(), status.getTotalServers());
+                    
+                    // UI 업데이트
+                    Display.getDefault().asyncExec(() -> {
+                        if (!mcpStatusLabel.isDisposed()) {
+                            updateMCPStatus(statusText, SWT.COLOR_DARK_GREEN);
+                        }
+                    });
+                    
+                    return Status.OK_STATUS;
+                    
+                } catch (Exception e) {
+                    Display.getDefault().asyncExec(() -> {
+                        if (!mcpStatusLabel.isDisposed()) {
+                            updateMCPStatus("Test failed: " + e.getMessage(), SWT.COLOR_RED);
+                        }
+                    });
+                    return new Status(IStatus.ERROR, "com.fabrix.copilot", 
+                        "MCP test failed", e);
+                }
+            }
+        };
+        
+        testJob.setUser(true);
+        testJob.schedule();
     }
     
     private void applyMCPConfig() {

@@ -9,11 +9,11 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-import com.fabrix.copilot.utils.CopilotLogger;
-import com.fabrix.copilot.utils.PreferenceManager;
-
 import org.json.JSONArray;
 import org.json.JSONObject;
+
+import com.fabrix.copilot.utils.CopilotLogger;
+import com.fabrix.copilot.utils.PreferenceManager;
 
 /**
  * 🔌 MCP Server Manager - MCP 서버 관리
@@ -46,8 +46,26 @@ public class McpServerManager {
     public boolean addServer(McpServerConfig config) {
         try {
             CopilotLogger.info("🔄 Attempting to connect to MCP server: " + config.getName());
+            
+            // npx 명령인 경우 사전 검증
+            if ("npx".equals(config.getCommand())) {
+                if (!verifyNpxCommand(config)) {
+                    CopilotLogger.error("❌ npx command verification failed for: " + config.getName(), null);
+                    return false;
+                }
+            }
+            
             McpClient client = new McpClient(config);
-            if (client.connect()) {
+            
+            // 연결 시도 (타임아웃 포함)
+            boolean connected = false;
+            try {
+                connected = client.connect();
+            } catch (Exception e) {
+                CopilotLogger.error("Connection attempt failed: " + e.getMessage(), e);
+            }
+            
+            if (connected) {
                 clients.put(config.getName(), client);
                 configs.put(config.getName(), config);
                 List<McpTool> tools = discoverTools(client, config.getName());
@@ -56,11 +74,45 @@ public class McpServerManager {
                     config.getName(), tools.size()));
                 return true;
             } else {
-                CopilotLogger.warn("❌ MCP server connection failed: " + config.getName(), null);
+                CopilotLogger.warn("❌ MCP server connection failed: " + config.getName());
                 return false;
             }
         } catch (Exception e) {
             CopilotLogger.error("❌ Failed to add MCP server: " + config.getName(), e);
+            return false;
+        }
+    }
+
+    private boolean verifyNpxCommand(McpServerConfig config) {
+        try {
+            // npx 사용 가능 여부 확인
+            ProcessBuilder pb = new ProcessBuilder();
+            String os = System.getProperty("os.name").toLowerCase();
+            
+            if (os.contains("win")) {
+                pb.command("cmd", "/c", "npx", "--version");
+            } else {
+                pb.command("sh", "-c", "npx --version");
+            }
+            
+            Process process = pb.start();
+            boolean completed = process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+            
+            if (!completed) {
+                process.destroyForcibly();
+                CopilotLogger.error("npx command timed out", null);
+                return false;
+            }
+            
+            if (process.exitValue() != 0) {
+                CopilotLogger.error("npx command failed with exit code: " + process.exitValue(), null);
+                return false;
+            }
+            
+            return true;
+            
+        } catch (Exception e) {
+            CopilotLogger.error("Failed to verify npx command: " + e.getMessage(), e);
             return false;
         }
     }
@@ -83,12 +135,28 @@ public class McpServerManager {
      */
     public void refreshServers() {
         CopilotLogger.info("🔄 Refreshing MCP server connections...");
-        List<String> disconnectedServers = clients.entrySet().stream()
-            .filter(entry -> !entry.getValue().isConnected())
-            .map(Map.Entry::getKey)
-            .collect(Collectors.toList());
         
-        disconnectedServers.forEach(this::removeServer);
+        // 각 서버를 개별적으로 처리
+        for (Map.Entry<String, McpClient> entry : new HashMap<>(clients).entrySet()) {
+            String serverName = entry.getKey();
+            McpClient client = entry.getValue();
+            
+            try {
+                if (!client.isConnected()) {
+                    CopilotLogger.info("Reconnecting server: " + serverName);
+                    removeServer(serverName);
+                    
+                    // 설정이 있으면 재연결 시도
+                    McpServerConfig config = configs.get(serverName);
+                    if (config != null) {
+                        addServer(config);
+                    }
+                }
+            } catch (Exception e) {
+                CopilotLogger.error("Error refreshing server " + serverName + ": " + e.getMessage(), e);
+            }
+        }
+        
         CopilotLogger.info("✅ MCP refresh complete. Connected servers: " + clients.size());
     }
 
@@ -101,47 +169,81 @@ public class McpServerManager {
             String configJson = prefs.getValue("mcp.config.json", "");
             
             if (!configJson.isEmpty() && !configJson.equals("{}")) {
-                CopilotLogger.info("Parsing MCP configuration from JSON...");
-                
-                // JSON 파싱 추가
-                JSONObject config = new JSONObject(configJson);
-                JSONArray servers = config.optJSONArray("mcpServers");
-                
-                if (servers != null) {
-                    for (int i = 0; i < servers.length(); i++) {
-                        JSONObject serverConfig = servers.getJSONObject(i);
-                        
-                        McpServerConfig mcpConfig = new McpServerConfig(
-                            serverConfig.getString("name"),
-                            serverConfig.optString("type", "stdio"),
-                            serverConfig.getString("command"),
-                            parseArgs(serverConfig.optJSONArray("args")),
-                            parseEnv(serverConfig.optJSONObject("env")),
-                            serverConfig.optInt("priority", 1)
-                        );
-                        
-                        addServer(mcpConfig);
-                    }
-                }
+                CopilotLogger.info("Parsing local MCP configuration...");
+                parseAndLoadMCPConfig(configJson);
             } else {
-                // 기본 설정 사용
+                CopilotLogger.info("No local MCP configuration found, setting up defaults.");
                 setupDefaultLocalMCP();
             }
         } catch (Exception e) {
-            CopilotLogger.error("Failed to load MCP config from JSON", e);
-            setupDefaultLocalMCP();
+            CopilotLogger.error("❌ Failed to load local MCP config", e);
         }
-    }
-
- // OS별 npx 실행 처리
-    private String getNpxCommand() {
-        String os = System.getProperty("os.name").toLowerCase();
-        if (os.contains("win")) {
-            return "npx.cmd"; // Windows
-        }
-        return "npx"; // Mac/Linux
     }
     
+    /**
+     * MCP 설정 JSON 파싱 및 로드
+     */
+    private void parseAndLoadMCPConfig(String configJson) {
+        try {
+            JSONObject config = new JSONObject(configJson);
+            
+            // mcpServers 섹션 파싱
+            if (config.has("mcpServers")) {
+                JSONObject servers = config.getJSONObject("mcpServers");
+                
+                for (String serverName : servers.keySet()) {
+                    JSONObject serverConfig = servers.getJSONObject(serverName);
+                    
+                    String command = serverConfig.getString("command");
+                    JSONArray argsArray = serverConfig.optJSONArray("args");
+                    JSONObject envObject = serverConfig.optJSONObject("env");
+                    
+                    List<String> args = parseArgs(argsArray);
+                    Map<String, String> env = parseEnv(envObject);
+                    
+                    McpServerConfig mcpConfig = new McpServerConfig(
+                        serverName,
+                        "stdio", // 기본 타입
+                        command,
+                        args,
+                        env,
+                        1
+                    );
+                    
+                    addServer(mcpConfig);
+                }
+            }
+        } catch (Exception e) {
+            CopilotLogger.error("Failed to parse MCP config JSON", e);
+        }
+    }
+    
+    /**
+     * JSON 배열을 List<String>으로 변환
+     */
+    private List<String> parseArgs(JSONArray argsArray) {
+        List<String> args = new ArrayList<>();
+        if (argsArray != null) {
+            for (int i = 0; i < argsArray.length(); i++) {
+                args.add(argsArray.getString(i));
+            }
+        }
+        return args;
+    }
+    
+    /**
+     * JSON 객체를 Map<String, String>으로 변환
+     */
+    private Map<String, String> parseEnv(JSONObject envObject) {
+        Map<String, String> env = new HashMap<>();
+        if (envObject != null) {
+            for (String key : envObject.keySet()) {
+                env.put(key, envObject.getString(key));
+            }
+        }
+        return env;
+    }
+
     /**
      * 기본 로컬 MCP 설정
      */
@@ -230,8 +332,6 @@ public class McpServerManager {
             return createGitTools();
         } else if (serverName.toLowerCase().contains("sqlite")) {
             return createSQLiteTools();
-        } else if (serverName.toLowerCase().contains("web")) {
-            return createWebTools();
         }
         
         return new ArrayList<>();
@@ -245,6 +345,7 @@ public class McpServerManager {
             case "search_files": return "파일 검색";
             case "git_status": return "Git 상태 확인";
             case "git_log": return "Git 로그 보기";
+            case "git_diff": return "Git 변경사항 보기";
             case "execute_query": return "SQL 쿼리 실행";
             default: return toolName + " 도구";
         }
@@ -258,13 +359,14 @@ public class McpServerManager {
             case "search_files": return "query,path";
             case "git_status": return "";
             case "git_log": return "limit";
+            case "git_diff": return "";
             case "execute_query": return "query";
             default: return "";
         }
     }
     
     /**
-     * 파일시스템 도구 생성
+     * 파일시스템 도구 생성 (실제 MCP filesystem 서버가 제공하는 도구만)
      */
     private List<McpTool> createFilesystemTools() { 
         List<McpTool> tools = new ArrayList<>();
@@ -272,48 +374,30 @@ public class McpServerManager {
         tools.add(new McpTool("write_file", "파일 쓰기", "path,content"));
         tools.add(new McpTool("list_directory", "디렉토리 목록", "path"));
         tools.add(new McpTool("search_files", "파일 검색", "query,path"));
-        tools.add(new McpTool("create_directory", "디렉토리 생성", "path"));
-        tools.add(new McpTool("delete_file", "파일 삭제", "path"));
-        tools.add(new McpTool("move_file", "파일 이동", "source,destination"));
-        tools.add(new McpTool("copy_file", "파일 복사", "source,destination"));
+        // 기본 제공되지 않는 도구들 제거
         return tools;
     }
     
     /**
-     * Git 도구 생성
+     * Git 도구 생성 (실제 MCP git 서버가 제공하는 도구만)
      */
     private List<McpTool> createGitTools() { 
         List<McpTool> tools = new ArrayList<>();
         tools.add(new McpTool("git_status", "Git 상태 확인", ""));
         tools.add(new McpTool("git_log", "Git 로그 보기", "limit"));
         tools.add(new McpTool("git_diff", "Git 변경사항 보기", ""));
-        tools.add(new McpTool("git_branch", "Git 브랜치 목록", ""));
-        tools.add(new McpTool("git_commit", "Git 커밋", "message"));
-        tools.add(new McpTool("git_push", "Git 푸시", "branch"));
-        tools.add(new McpTool("git_pull", "Git 풀", "branch"));
+        // 기본 제공되지 않는 도구들 제거
         return tools;
     }
     
     /**
-     * SQLite 도구 생성
+     * SQLite 도구 생성 (실제 MCP sqlite 서버가 제공하는 도구만)
      */
     private List<McpTool> createSQLiteTools() {
         List<McpTool> tools = new ArrayList<>();
         tools.add(new McpTool("execute_query", "SQL 쿼리 실행", "query"));
         tools.add(new McpTool("list_tables", "테이블 목록", ""));
         tools.add(new McpTool("describe_table", "테이블 구조", "table_name"));
-        tools.add(new McpTool("create_table", "테이블 생성", "table_name,columns"));
-        return tools;
-    }
-    
-    /**
-     * 웹 도구 생성
-     */
-    private List<McpTool> createWebTools() {
-        List<McpTool> tools = new ArrayList<>();
-        tools.add(new McpTool("fetch_url", "URL 가져오기", "url"));
-        tools.add(new McpTool("search_web", "웹 검색", "query"));
-        tools.add(new McpTool("scrape_page", "페이지 스크래핑", "url,selector"));
         return tools;
     }
     

@@ -148,9 +148,24 @@ public class McpClient {
             
             ProcessBuilder pb = new ProcessBuilder(command);
             pb.environment().putAll(config.getEnv());
-            pb.redirectErrorStream(false); // 에러 스트림 분리
+            pb.redirectErrorStream(false);
             
             serverProcess = pb.start();
+            
+            // 프로세스 시작 확인 (타임아웃 추가)
+            boolean started = false;
+            for (int i = 0; i < 10; i++) { // 최대 5초 대기
+                Thread.sleep(500);
+                if (serverProcess.isAlive()) {
+                    started = true;
+                    break;
+                }
+            }
+            
+            if (!started) {
+                CopilotLogger.error("MCP server process failed to start", null);
+                return false;
+            }
             
             // stdio 스트림 설정
             stdioReader = new BufferedReader(new InputStreamReader(serverProcess.getInputStream()));
@@ -174,19 +189,15 @@ public class McpClient {
             // 응답 리더 스레드 시작
             startStdioReaderThread();
             
-            // 프로세스가 시작되었는지 확인
-            Thread.sleep(1000);
-            if (!serverProcess.isAlive()) {
-                int exitCode = serverProcess.exitValue();
-                CopilotLogger.error("MCP server process exited with code: " + exitCode, null);
-                return false;
-            }
-            
-            // 초기화 메시지 전송
-            String initResponse = sendInitializeRequest();
-            if (initResponse != null && initResponse.contains("result")) {
-                CopilotLogger.info("✅ stdio connection successful");
-                return true;
+            // 초기화 메시지 전송 (타임아웃 추가)
+            try {
+                String initResponse = sendInitializeRequestWithTimeout(5000); // 5초 타임아웃
+                if (initResponse != null && initResponse.contains("result")) {
+                    CopilotLogger.info("✅ stdio connection successful");
+                    return true;
+                }
+            } catch (Exception e) {
+                CopilotLogger.error("Initialization failed: " + e.getMessage(), e);
             }
             
             return false;
@@ -194,6 +205,30 @@ public class McpClient {
         } catch (Exception e) {
             CopilotLogger.error("❌ stdio connection failed: " + e.getMessage(), e);
             return false;
+        }
+    }
+
+    // 타임아웃이 있는 초기화 요청
+    private String sendInitializeRequestWithTimeout(long timeoutMs) throws Exception {
+        Map<String, Object> params = new HashMap<>();
+        params.put("protocolVersion", "2024-11-05");
+        params.put("capabilities", new HashMap<>());
+        params.put("clientInfo", Map.of(
+            "name", "FabriX Copilot",
+            "version", "1.0.0"
+        ));
+        
+        // Future를 사용하여 타임아웃 구현
+        java.util.concurrent.CompletableFuture<String> future = 
+            java.util.concurrent.CompletableFuture.supplyAsync(() -> 
+                sendMCPRequest("initialize", params)
+            );
+        
+        try {
+            return future.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            future.cancel(true);
+            throw new Exception("MCP initialization timed out after " + timeoutMs + "ms");
         }
     }
     
@@ -339,38 +374,55 @@ public class McpClient {
      */
     private String sendStdioRequest(String request) {
         if (stdioWriter == null || stdioReader == null) {
+            CopilotLogger.error("stdio streams are null", null);
             return null;
         }
         
         try {
-            // Content-Length 헤더 추가 (JSON-RPC over stdio)
+            CopilotLogger.debug("Sending stdio request: " + request);
+            
+            // Content-Length 헤더 추가
             String message = "Content-Length: " + request.length() + "\r\n\r\n" + request;
             stdioWriter.println(message);
             stdioWriter.flush();
             
-            // 응답 읽기 (간단한 구현)
-            Thread.sleep(100); // 응답 대기
+            // 응답 대기 (타임아웃 추가)
+            long startTime = System.currentTimeMillis();
+            long timeout = 5000; // 5초
             
             StringBuilder response = new StringBuilder();
             String line;
             boolean inContent = false;
             int contentLength = 0;
             
-            while (stdioReader.ready() && (line = stdioReader.readLine()) != null) {
-                if (!inContent) {
-                    if (line.startsWith("Content-Length:")) {
-                        contentLength = Integer.parseInt(line.substring(15).trim());
-                    } else if (line.isEmpty()) {
-                        inContent = true;
+            while (System.currentTimeMillis() - startTime < timeout) {
+                if (stdioReader.ready()) {
+                    line = stdioReader.readLine();
+                    CopilotLogger.debug("Received line: " + line);
+                    
+                    if (!inContent) {
+                        if (line.startsWith("Content-Length:")) {
+                            contentLength = Integer.parseInt(line.substring(15).trim());
+                        } else if (line.isEmpty()) {
+                            inContent = true;
+                        }
+                    } else {
+                        response.append(line);
+                        if (response.length() >= contentLength) {
+                            break;
+                        }
                     }
                 } else {
-                    response.append(line);
-                    if (response.length() >= contentLength) {
-                        break;
-                    }
+                    Thread.sleep(100); // 100ms 대기
                 }
             }
             
+            if (response.length() == 0) {
+                CopilotLogger.error("No response received within timeout", null);
+                return null;
+            }
+            
+            CopilotLogger.debug("Received response: " + response.toString());
             return response.toString();
             
         } catch (Exception e) {
