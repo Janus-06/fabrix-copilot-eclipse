@@ -781,6 +781,8 @@ public class ChatView extends ViewPart {
         });
     }
     
+ // ChatView.java의 sendMessage 메서드 수정
+
     private void sendMessage() {
         String message = inputText.getText().trim();
         if (message.isEmpty() || message.equals("질문을 입력하세요...") || isProcessing) {
@@ -794,45 +796,141 @@ public class ChatView extends ViewPart {
         }
 
         setProcessingState(true);
+        
+        // 입력 텍스트를 즉시 저장하고 초기화
+        final String userMessage = message;
+        
+        // UI 스레드에서 즉시 입력창 초기화
+        Display.getDefault().syncExec(() -> {
+            inputText.setText("");
+            inputText.setFocus();
+        });
 
-        // 사용자에게 보이는 메시지는 원본 메시지만
-        addMessage("👤 " + message, true);
-        conversationManager.addMessage(currentSessionId, message, true);
+        // 사용자 메시지 추가
+        addMessage("👤 " + userMessage, true);
+        conversationManager.addMessage(currentSessionId, userMessage, true);
 
         String selectedModel = getSelectedModelId();
-        
-        // 컨텍스트 생성 (파일 코드 포함)
         String context = getCurrentContext();
         
-        // MCP 도구 요청은 MCP가 설정되어 있고, 명시적으로 요청한 경우만
-        if (shouldUseMCPTool(message)) {
-            executeMCPTool(message, selectedModel);
+        // 비동기 처리
+        if (shouldUseMCPTool(userMessage)) {
+            executeMCPToolAsync(userMessage, context, selectedModel);
         } else {
-            // 일반 메시지 처리 - 컨텍스트에 첨부 파일 내용 포함
-            agentOrchestrator.processComplexRequestAsync(message, context, selectedModel,
-                response -> {
-                    Display.getDefault().asyncExec(() -> {
-                        if (chatContent.isDisposed()) return;
-                        addMessage("🤖 " + response, false);
-                        conversationManager.addMessage(currentSessionId, response, false);
-                        setProcessingState(false);
-                        inputText.setText("");
-                        
-                        // 첨부 파일은 유지 (Copilot처럼)
-                        // clearAttachedCode(); // 제거
-                    });
-                },
-                error -> {
-                    Display.getDefault().asyncExec(() -> {
-                        if (chatContent.isDisposed()) return;
-                        String errorMessage = "❌ 오류: " + error.getMessage();
-                        addMessage(errorMessage, false);
-                        setProcessingState(false);
-                        CopilotLogger.error("Message processing failed", error);
-                    });
-                }
-            );
+            executeGeneralRequestAsync(userMessage, context, selectedModel);
         }
+    }
+
+    // MCP 도구 비동기 실행
+    private void executeMCPToolAsync(String message, String context, String modelId) {
+        Job job = new Job("MCP Tool Execution") {
+            @Override
+            protected IStatus run(IProgressMonitor monitor) {
+                try {
+                    monitor.beginTask("MCP 도구 실행 중...", IProgressMonitor.UNKNOWN);
+                    
+                    String mcpContext = "MCP Tool Request: " + message;
+                    if (!attachedCode.isEmpty()) {
+                        mcpContext += "\n\nAttached Code:\n" + attachedCode;
+                    }
+                    
+                    // AgentOrchestrator를 통해 처리
+                    String response = agentOrchestrator.processComplexRequest(
+                        message, mcpContext, modelId);
+                    
+                    // UI 업데이트
+                    Display.getDefault().asyncExec(() -> {
+                        if (!chatContent.isDisposed()) {
+                            addMessage("🔌 " + response, false);
+                            conversationManager.addMessage(currentSessionId, response, false);
+                            setProcessingState(false);
+                            
+                            // 스크롤
+                            if (preferenceManager.isAutoScrollEnabled()) {
+                                scrollToBottom();
+                            }
+                        }
+                    });
+                    
+                    return Status.OK_STATUS;
+                    
+                } catch (Exception e) {
+                    Display.getDefault().asyncExec(() -> {
+                        if (!chatContent.isDisposed()) {
+                            String errorMessage = "❌ MCP 도구 실행 실패: " + e.getMessage();
+                            addMessage(errorMessage, false);
+                            setProcessingState(false);
+                        }
+                    });
+                    
+                    CopilotLogger.error("MCP tool execution failed", e);
+                    return Status.error("MCP 도구 실행 실패", e);
+                }
+            }
+        };
+        
+        job.setUser(false);
+        job.schedule();
+    }
+
+    // 일반 요청 비동기 실행
+    private void executeGeneralRequestAsync(String message, String context, String modelId) {
+        agentOrchestrator.processComplexRequestAsync(message, context, modelId,
+            response -> {
+                Display.getDefault().asyncExec(() -> {
+                    if (chatContent.isDisposed()) return;
+                    
+                    addMessage("🤖 " + response, false);
+                    conversationManager.addMessage(currentSessionId, response, false);
+                    setProcessingState(false);
+                    
+                    // 스크롤
+                    if (preferenceManager.isAutoScrollEnabled()) {
+                        scrollToBottom();
+                    }
+                });
+            },
+            error -> {
+                Display.getDefault().asyncExec(() -> {
+                    if (chatContent.isDisposed()) return;
+                    
+                    String errorMessage = "❌ 오류: " + error.getMessage();
+                    addMessage(errorMessage, false);
+                    setProcessingState(false);
+                    CopilotLogger.error("Message processing failed", error);
+                });
+            }
+        );
+    }
+
+    // 처리 상태 설정 개선
+    private void setProcessingState(boolean processing) {
+        Display.getDefault().asyncExec(() -> {
+            if (!isDisposed()) {
+                isProcessing = processing;
+                sendButton.setEnabled(!processing);
+                inputText.setEditable(!processing);
+                
+                if (processing) {
+                    statusLabel.setText("Processing...");
+                    sendButton.setText("처리 중...");
+                } else {
+                    statusLabel.setText("Ready");
+                    sendButton.setText("전송 (Ctrl+Enter)");
+                    
+                    // 포커스를 입력창으로 되돌리기
+                    inputText.setFocus();
+                }
+            }
+        });
+    }
+
+    // isDisposed 헬퍼 메서드 추가
+    private boolean isDisposed() {
+        return mainComposite == null || mainComposite.isDisposed() ||
+               inputText == null || inputText.isDisposed() ||
+               sendButton == null || sendButton.isDisposed() ||
+               statusLabel == null || statusLabel.isDisposed();
     }
     
     // MCP 도구 사용 여부 결정 - MCP가 설정되어 있고 명시적 요청인 경우만
@@ -843,23 +941,107 @@ public class ChatView extends ViewPart {
             return false;
         }
         
-        // 명시적인 도구 요청인지 확인
         String lower = message.toLowerCase();
         
-        // 파일 시스템 작업 (단순 파일 참조가 아닌 작업 요청)
-        boolean explicitFileOperation = 
-            (lower.contains("파일") && (lower.contains("목록") || lower.contains("리스트"))) ||
-            (lower.contains("디렉토리") && (lower.contains("보여") || lower.contains("확인"))) ||
-            (lower.contains("파일") && lower.contains("저장")) ||
-            (lower.contains("파일") && lower.contains("생성"));
-            
-        // Git 명령
-        boolean gitOperation = lower.contains("git") || lower.contains("깃");
+        // 1. 연결된 도구들의 키워드 검사
+        Map<String, List<McpServerManager.McpTool>> connectedTools = 
+            McpServerManager.getInstance().getConnectedTools();
         
-        // 명시적인 MCP 도구 언급
-        boolean explicitMCP = lower.contains("mcp") || lower.contains("도구 사용");
+        for (List<McpServerManager.McpTool> tools : connectedTools.values()) {
+            for (McpServerManager.McpTool tool : tools) {
+                String toolName = tool.getName().toLowerCase();
+                // 도구 이름이 메시지에 관련되어 있는지 확인
+                if (isToolRelatedToMessage(toolName, lower)) {
+                    CopilotLogger.info("MCP tool detected: " + tool.getName());
+                    return true;
+                }
+            }
+        }
         
-        return explicitFileOperation || gitOperation || explicitMCP;
+        // 2. 일반적인 MCP 작업 패턴 감지
+        // 파일 작업
+        boolean fileOperation = 
+            (lower.contains("파일") || lower.contains("file")) &&
+            (lower.contains("읽") || lower.contains("read") ||
+             lower.contains("쓰") || lower.contains("write") ||
+             lower.contains("목록") || lower.contains("list") ||
+             lower.contains("검색") || lower.contains("search") ||
+             lower.contains("생성") || lower.contains("create") ||
+             lower.contains("삭제") || lower.contains("delete"));
+        
+        // 디렉토리 작업
+        boolean directoryOperation = 
+            (lower.contains("디렉토리") || lower.contains("directory") || 
+             lower.contains("폴더") || lower.contains("folder")) &&
+            (lower.contains("보") || lower.contains("show") ||
+             lower.contains("목록") || lower.contains("list") ||
+             lower.contains("내용") || lower.contains("content"));
+        
+        // Git 작업
+        boolean gitOperation = 
+            lower.contains("git") || lower.contains("깃") ||
+            lower.contains("커밋") || lower.contains("commit") ||
+            lower.contains("브랜치") || lower.contains("branch") ||
+            lower.contains("상태") || lower.contains("status");
+        
+        // 데이터베이스 작업
+        boolean dbOperation = 
+            (lower.contains("쿼리") || lower.contains("query") ||
+             lower.contains("테이블") || lower.contains("table") ||
+             lower.contains("데이터베이스") || lower.contains("database")) &&
+            (lower.contains("실행") || lower.contains("execute") ||
+             lower.contains("조회") || lower.contains("select") ||
+             lower.contains("목록") || lower.contains("list"));
+        
+        // 명시적인 MCP/도구 언급
+        boolean explicitMCP = 
+            lower.contains("mcp") || 
+            lower.contains("도구") && (lower.contains("사용") || lower.contains("실행"));
+        
+        boolean shouldUse = fileOperation || directoryOperation || gitOperation || 
+                           dbOperation || explicitMCP;
+        
+        if (shouldUse) {
+            CopilotLogger.info("MCP tool usage detected for message: " + message);
+        }
+        
+        return shouldUse;
+    }
+    
+ // 도구 이름과 메시지의 연관성 검사
+    private boolean isToolRelatedToMessage(String toolName, String message) {
+        // 도구 이름의 키워드 추출
+        String[] toolKeywords = toolName.split("_");
+        
+        for (String keyword : toolKeywords) {
+            if (keyword.length() > 2 && message.contains(keyword)) {
+                return true;
+            }
+        }
+        
+        // 특정 도구별 키워드 매핑
+        Map<String, String[]> toolKeywordMap = new HashMap<>();
+        toolKeywordMap.put("read_file", new String[]{"읽", "read", "파일", "file", "내용", "content"});
+        toolKeywordMap.put("write_file", new String[]{"쓰", "write", "저장", "save", "파일", "file"});
+        toolKeywordMap.put("list_directory", new String[]{"목록", "list", "디렉토리", "directory", "폴더", "folder"});
+        toolKeywordMap.put("search_files", new String[]{"검색", "search", "찾", "find", "파일", "file"});
+        toolKeywordMap.put("git_status", new String[]{"git", "깃", "상태", "status"});
+        toolKeywordMap.put("git_log", new String[]{"git", "깃", "로그", "log", "이력", "history"});
+        toolKeywordMap.put("execute_query", new String[]{"쿼리", "query", "실행", "execute", "sql"});
+        
+        String[] keywords = toolKeywordMap.get(toolName);
+        if (keywords != null) {
+            int matchCount = 0;
+            for (String keyword : keywords) {
+                if (message.contains(keyword)) {
+                    matchCount++;
+                }
+            }
+            // 2개 이상의 키워드가 매칭되면 관련 있다고 판단
+            return matchCount >= 2;
+        }
+        
+        return false;
     }
     
     // MCP 도구 실행
@@ -901,17 +1083,6 @@ public class ChatView extends ViewPart {
             return fileName.substring(lastDot + 1).toLowerCase();
         }
         return "";
-    }
-    
-    private void setProcessingState(boolean processing) {
-        isProcessing = processing;
-        sendButton.setEnabled(!processing);
-        inputText.setEditable(!processing);
-        if (processing) {
-            statusLabel.setText("Processing...");
-        } else {
-            statusLabel.setText("Ready");
-        }
     }
     
     private void addMessage(String content, boolean isUser) {

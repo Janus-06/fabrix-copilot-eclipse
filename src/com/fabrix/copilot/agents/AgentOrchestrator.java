@@ -9,7 +9,10 @@ import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
-
+import java.util.List;  // 추가
+import java.util.Map;   // 추가
+import java.util.HashMap; // 추가
+import com.fabrix.copilot.mcp.McpServerManager;
 /**
  * 🎯 AgentOrchestrator - ReAct 패턴 통합 오케스트레이터 (개선된 버전)
  * - MCP 도구 요청을 감지하고 적절한 에이전트로 라우팅
@@ -79,33 +82,63 @@ job.schedule();
         
         String lower = request.toLowerCase();
         
-        // 파일 관련 키워드
-        boolean fileRelated = lower.contains("파일") || lower.contains("file") || 
-                            lower.contains("디렉토리") || lower.contains("directory") ||
-                            lower.contains("폴더") || lower.contains("folder");
+        // MCP 서버가 연결되어 있는지 확인
+        McpServerManager.McpStatus status = McpServerManager.getInstance().getStatus();
+        if (status.getConnectedServers() == 0) {
+            return false;
+        }
         
-        // 동작 관련 키워드
-        boolean actionRelated = lower.contains("읽") || lower.contains("read") ||
-                              lower.contains("쓰") || lower.contains("write") ||
-                              lower.contains("저장") || lower.contains("save") ||
-                              lower.contains("목록") || lower.contains("list") ||
-                              lower.contains("검색") || lower.contains("search") ||
-                              lower.contains("찾") || lower.contains("find");
+        // 연결된 도구들 확인
+        Map<String, List<McpServerManager.McpTool>> connectedTools = 
+            McpServerManager.getInstance().getConnectedTools();
         
-        // Git 관련 키워드
-        boolean gitRelated = lower.contains("git") || lower.contains("깃") ||
-                           lower.contains("커밋") || lower.contains("commit") ||
-                           lower.contains("브랜치") || lower.contains("branch");
+        // 각 도구별로 관련 키워드 확인
+        for (List<McpServerManager.McpTool> tools : connectedTools.values()) {
+            for (McpServerManager.McpTool tool : tools) {
+                if (isRequestForTool(lower, tool.getName())) {
+                    CopilotLogger.info("Request matches MCP tool: " + tool.getName());
+                    return true;
+                }
+            }
+        }
         
-        // 데이터베이스 관련 키워드
-        boolean dbRelated = lower.contains("쿼리") || lower.contains("query") ||
-                          lower.contains("테이블") || lower.contains("table") ||
-                          lower.contains("데이터베이스") || lower.contains("database");
+        // 일반적인 MCP 패턴 확인
+        boolean hasFileKeywords = (lower.contains("파일") || lower.contains("file")) &&
+                                 (lower.contains("읽") || lower.contains("쓰") || 
+                                  lower.contains("목록") || lower.contains("검색"));
         
-        // MCP 명시적 언급
-        boolean mcpExplicit = lower.contains("mcp") || lower.contains("도구") || lower.contains("tool");
+        boolean hasGitKeywords = lower.contains("git") || lower.contains("깃");
         
-        return (fileRelated && actionRelated) || gitRelated || dbRelated || mcpExplicit;
+        boolean hasDbKeywords = (lower.contains("쿼리") || lower.contains("query")) &&
+                               (lower.contains("실행") || lower.contains("조회"));
+        
+        boolean hasMcpKeywords = lower.contains("mcp") || 
+                                (lower.contains("도구") && lower.contains("사용"));
+        
+        return hasFileKeywords || hasGitKeywords || hasDbKeywords || hasMcpKeywords;
+    }
+
+    // 특정 도구에 대한 요청인지 확인
+    private boolean isRequestForTool(String request, String toolName) {
+        switch (toolName.toLowerCase()) {
+            case "read_file":
+                return request.contains("파일") && (request.contains("읽") || request.contains("내용"));
+            case "write_file":
+                return request.contains("파일") && (request.contains("쓰") || request.contains("저장"));
+            case "list_directory":
+                return (request.contains("디렉토리") || request.contains("폴더")) && 
+                       (request.contains("목록") || request.contains("보"));
+            case "search_files":
+                return request.contains("파일") && (request.contains("검색") || request.contains("찾"));
+            case "git_status":
+                return request.contains("git") && request.contains("상태");
+            case "git_log":
+                return request.contains("git") && (request.contains("로그") || request.contains("이력"));
+            case "execute_query":
+                return request.contains("쿼리") && request.contains("실행");
+            default:
+                return false;
+        }
     }
     
     /**
@@ -119,11 +152,27 @@ job.schedule();
             // 컨텍스트 강화
             String enhancedContext = buildEnhancedContext(userRequest, fileContext, modelId);
             
-            CopilotLogger.info("Processing complex request through ReactAgent");
+            CopilotLogger.info("Processing complex request");
             CopilotLogger.info("Session ID: " + sessionId);
-            CopilotLogger.info("Enhanced context: " + enhancedContext);
             
-            // ReactAgent를 통해 처리
+            // MCP 도구 요청인지 먼저 확인
+            if (isMCPToolRequest(userRequest)) {
+                CopilotLogger.info("MCP tool request detected, routing to McpAgent");
+                
+                // McpAgent로 직접 라우팅
+                McpAgent mcpAgent = AgentProvider.getMcpAgent();
+                String mcpResponse = mcpAgent.process(userRequest, enhancedContext);
+                
+                // 대화 기록에 추가
+                conversationManager.addMessage(sessionId, userRequest, true);
+                conversationManager.addMessage(sessionId, mcpResponse, false);
+                
+                return mcpResponse;
+            }
+            
+            // MCP가 아닌 경우 ReactAgent를 통해 처리
+            CopilotLogger.info("Processing through ReactAgent");
+            
             ReactAgent.ReactResponse response = reactAgent.process(
                 userRequest, 
                 enhancedContext, 
