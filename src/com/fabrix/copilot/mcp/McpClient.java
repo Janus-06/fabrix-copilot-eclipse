@@ -5,6 +5,8 @@ import java.net.*;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.json.JSONObject;
+import org.json.JSONArray;
 
 import com.fabrix.copilot.utils.CopilotLogger;
 
@@ -218,11 +220,14 @@ public class McpClient {
             "version", "1.0.0"
         ));
         
-        // Future를 사용하여 타임아웃 구현
+        // Supplier<String> 타입으로 명시적 선언
         java.util.concurrent.CompletableFuture<String> future = 
-            java.util.concurrent.CompletableFuture.supplyAsync(() -> 
-                sendMCPRequest("initialize", params)
-            );
+            java.util.concurrent.CompletableFuture.supplyAsync(new java.util.function.Supplier<String>() {
+                @Override
+                public String get() {
+                    return sendMCPRequest("initialize", params);
+                }
+            });
         
         try {
             return future.get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
@@ -299,32 +304,41 @@ public class McpClient {
      * 초기화 요청 전송
      */
     private String sendInitializeRequest() {
-        Map<String, Object> params = new HashMap<>();
-        params.put("protocolVersion", "2024-11-05");
-        params.put("capabilities", new HashMap<>());
-        params.put("clientInfo", Map.of(
-            "name", "FabriX Copilot",
-            "version", "1.0.0"
-        ));
+        // 수동으로 JSON 생성
+        StringBuilder json = new StringBuilder();
+        json.append("{");
+        json.append("\"jsonrpc\":\"2.0\",");
+        json.append("\"id\":").append(jsonRpcIdCounter++).append(",");
+        json.append("\"method\":\"initialize\",");
+        json.append("\"params\":{");
+        json.append("\"protocolVersion\":\"2024-11-05\",");
+        json.append("\"capabilities\":{},");
+        json.append("\"clientInfo\":{");
+        json.append("\"name\":\"FabriX Copilot\",");
+        json.append("\"version\":\"1.0.0\"");
+        json.append("}}}");
         
-        return sendMCPRequest("initialize", params);
+        return sendMCPRequest(json.toString());
     }
-    
-    /**
-     * 🔍 서버에서 도구 검색
-     */
+
     private boolean discoverToolsFromServer() {
         try {
             CopilotLogger.info("🔍 Discovering tools from MCP server: " + config.getName());
             
-            // MCP tools/list 명령 실행
-            String toolsResponse = sendMCPRequest("tools/list", new HashMap<>());
+            // 수동으로 JSON 생성
+            StringBuilder json = new StringBuilder();
+            json.append("{");
+            json.append("\"jsonrpc\":\"2.0\",");
+            json.append("\"id\":").append(jsonRpcIdCounter++).append(",");
+            json.append("\"method\":\"tools/list\",");
+            json.append("\"params\":{}");
+            json.append("}");
+            
+            String toolsResponse = sendMCPRequest(json.toString());
             
             if (toolsResponse != null && !toolsResponse.isEmpty()) {
                 CopilotLogger.info("📥 Tools response received: " + toolsResponse);
                 return parseToolsFromResponse(toolsResponse);
-            } else {
-                CopilotLogger.warn("No tools response from server");
             }
             
             return false;
@@ -368,6 +382,30 @@ public class McpClient {
             return null;
         }
     }
+
+    // 새로운 오버로드 메서드 추가
+    private String sendMCPRequest(String jsonRequest) {
+        CopilotLogger.debug("📤 MCP Request: " + jsonRequest);
+        
+        String response = null;
+        
+        switch (config.getType().toLowerCase()) {
+            case "stdio":
+                response = sendStdioRequest(jsonRequest);
+                break;
+            case "http":
+                response = sendHTTPRequest(jsonRequest);
+                break;
+            default:
+                CopilotLogger.error("Unsupported transport: " + config.getType(), null);
+        }
+        
+        if (response != null) {
+            CopilotLogger.debug("📥 MCP Response: " + response);
+        }
+        
+        return response;
+    }
     
     /**
      * stdio 요청 전송
@@ -381,49 +419,19 @@ public class McpClient {
         try {
             CopilotLogger.debug("Sending stdio request: " + request);
             
-            // Content-Length 헤더 추가
-            String message = "Content-Length: " + request.length() + "\r\n\r\n" + request;
-            stdioWriter.println(message);
+            // JSON-RPC 메시지 전송 (Content-Length 헤더 없이)
+            stdioWriter.println(request);
             stdioWriter.flush();
             
-            // 응답 대기 (타임아웃 추가)
-            long startTime = System.currentTimeMillis();
-            long timeout = 5000; // 5초
+            // 응답 읽기 (한 줄로 오는 JSON 응답)
+            String response = stdioReader.readLine();
             
-            StringBuilder response = new StringBuilder();
-            String line;
-            boolean inContent = false;
-            int contentLength = 0;
-            
-            while (System.currentTimeMillis() - startTime < timeout) {
-                if (stdioReader.ready()) {
-                    line = stdioReader.readLine();
-                    CopilotLogger.debug("Received line: " + line);
-                    
-                    if (!inContent) {
-                        if (line.startsWith("Content-Length:")) {
-                            contentLength = Integer.parseInt(line.substring(15).trim());
-                        } else if (line.isEmpty()) {
-                            inContent = true;
-                        }
-                    } else {
-                        response.append(line);
-                        if (response.length() >= contentLength) {
-                            break;
-                        }
-                    }
-                } else {
-                    Thread.sleep(100); // 100ms 대기
-                }
+            if (response != null) {
+                CopilotLogger.debug("Received response: " + response);
+                return response;
             }
             
-            if (response.length() == 0) {
-                CopilotLogger.error("No response received within timeout", null);
-                return null;
-            }
-            
-            CopilotLogger.debug("Received response: " + response.toString());
-            return response.toString();
+            return null;
             
         } catch (Exception e) {
             CopilotLogger.error("stdio request failed: " + e.getMessage(), e);
@@ -547,20 +555,34 @@ public class McpClient {
         try {
             availableTools.clear();
             
-            // 간단한 JSON 파싱 (실제 구현에서는 JSON 라이브러리 사용)
-            if (response.contains("\"tools\"") && response.contains("[")) {
-                // "name" 필드 찾기
-                int index = 0;
-                while ((index = response.indexOf("\"name\"", index)) != -1) {
-                    int start = response.indexOf("\"", index + 6) + 1;
-                    int end = response.indexOf("\"", start);
-                    if (start > 0 && end > start) {
-                        String toolName = response.substring(start, end);
-                        availableTools.add(toolName);
-                        CopilotLogger.debug("Found tool: " + toolName);
-                    }
-                    index = end;
+            // "tools" 배열 찾기
+            int toolsStart = response.indexOf("\"tools\":");
+            if (toolsStart == -1) {
+                CopilotLogger.warn("No tools field in response");
+                return false;
+            }
+            
+            // 배열 시작 찾기
+            int arrayStart = response.indexOf("[", toolsStart);
+            if (arrayStart == -1) return false;
+            
+            // 배열 끝 찾기
+            int arrayEnd = response.indexOf("]", arrayStart);
+            if (arrayEnd == -1) return false;
+            
+            String toolsArray = response.substring(arrayStart + 1, arrayEnd);
+            
+            // 각 도구의 name 필드 추출
+            int index = 0;
+            while ((index = toolsArray.indexOf("\"name\"", index)) != -1) {
+                int nameStart = toolsArray.indexOf("\"", index + 6) + 1;
+                int nameEnd = toolsArray.indexOf("\"", nameStart);
+                if (nameStart > 0 && nameEnd > nameStart) {
+                    String toolName = toolsArray.substring(nameStart, nameEnd);
+                    availableTools.add(toolName);
+                    CopilotLogger.debug("Found tool: " + toolName);
                 }
+                index = nameEnd;
             }
             
             CopilotLogger.info("🛠️ Parsed " + availableTools.size() + " tools from server");

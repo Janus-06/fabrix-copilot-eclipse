@@ -45,40 +45,34 @@ public class McpServerManager {
      */
     public boolean addServer(McpServerConfig config) {
         try {
-            CopilotLogger.info("🔄 Attempting to connect to MCP server: " + config.getName());
+            CopilotLogger.info("🔄 Adding MCP server: " + config.getName());
             
-            // npx 명령인 경우 사전 검증
-            if ("npx".equals(config.getCommand())) {
-                if (!verifyNpxCommand(config)) {
-                    CopilotLogger.error("❌ npx command verification failed for: " + config.getName(), null);
-                    return false;
-                }
-            }
+            // Claude Desktop 스타일의 stdio 클라이언트 사용
+            McpStdioClient client = new McpStdioClient(config);
             
-            McpClient client = new McpClient(config);
-            
-            // 연결 시도 (타임아웃 포함)
-            boolean connected = false;
-            try {
-                connected = client.connect();
-            } catch (Exception e) {
-                CopilotLogger.error("Connection attempt failed: " + e.getMessage(), e);
-            }
-            
-            if (connected) {
-                clients.put(config.getName(), client);
+            if (client.connect()) {
+                // 기존 clients Map의 타입을 변경하거나, adapter 패턴 사용
+                clients.put(config.getName(), new McpClientAdapter(client));
                 configs.put(config.getName(), config);
-                List<McpTool> tools = discoverTools(client, config.getName());
-                availableTools.put(config.getName(), tools);
-                CopilotLogger.info(String.format("✅ MCP server connected: %s (%d tools discovered)", 
-                    config.getName(), tools.size()));
+                
+                // 도구 목록 생성
+                Set<String> tools = client.getAvailableTools();
+                List<McpTool> mcpTools = tools.stream()
+                    .map(name -> new McpTool(name, getToolDescription(name), getToolParameters(name)))
+                    .collect(Collectors.toList());
+                
+                availableTools.put(config.getName(), mcpTools);
+                
+                CopilotLogger.info(String.format("✅ MCP server connected: %s (%d tools)", 
+                    config.getName(), mcpTools.size()));
+                
                 return true;
-            } else {
-                CopilotLogger.warn("❌ MCP server connection failed: " + config.getName());
-                return false;
             }
+            
+            return false;
+            
         } catch (Exception e) {
-            CopilotLogger.error("❌ Failed to add MCP server: " + config.getName(), e);
+            CopilotLogger.error("Failed to add MCP server", e);
             return false;
         }
     }
