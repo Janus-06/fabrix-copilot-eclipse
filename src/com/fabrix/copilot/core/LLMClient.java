@@ -33,6 +33,7 @@ import org.json.JSONObject;
 import com.fabrix.copilot.utils.CopilotLogger;
 import com.fabrix.copilot.utils.PreferenceManager;
 
+
 /**
  * 🤖 LLM Client - 수정된 버전
  * SSL 처리, 에러 핸들링, 재시도 로직 개선
@@ -50,6 +51,9 @@ public class LLMClient {
     
     private static LLMClient instance;
 
+    private static final String FABRIX_DEFAULT_MODEL_ID = "116";  // Gemma3
+    private static final String FABRIX_DEFAULT_MODEL_NAME = "Gemma3";    
+    
     private final PreferenceManager preferenceManager;
     private final ExecutorService executorService;
     private final Map<String, FabriXModel> fabriXModelsCache;
@@ -269,9 +273,15 @@ public class LLMClient {
     
     private String buildFabriXRequest(String message, String modelId) {
         JSONObject payload = new JSONObject();
-        if (modelId != null && !modelId.isEmpty()) {
+        
+        // modelId가 없거나 빈 경우 기본값 116 사용
+        if (modelId == null || modelId.isEmpty()) {
+            CopilotLogger.info("모델 ID가 없어 기본 모델 Gemma3(116) 사용");
+            payload.put("llmId", FABRIX_DEFAULT_MODEL_ID);
+        } else {
             payload.put("llmId", modelId);
         }
+        
         payload.put("temperature", preferenceManager.getTemperature());
         payload.put("max_tokens", preferenceManager.getMaxTokens());
         
@@ -352,14 +362,15 @@ public class LLMClient {
                 // OpenAI 모델 추가
                 if (preferenceManager.hasOpenAIKey()) {
                     allModels.add(new ModelInfo("gpt-4", "GPT-4", "GPT-4", "Most capable GPT-4 model", false));
-                    allModels.add(new ModelInfo("gpt-4-turbo-preview", "GPT-4 Turbo", "GPT-4 Turbo", "GPT-4 Turbo with 128k context", false));
                     allModels.add(new ModelInfo("gpt-3.5-turbo", "GPT-3.5 Turbo", "GPT-3.5 Turbo", "Fast and efficient model", false));
                 }
                 
                 // FabriX 모델 추가
                 if (preferenceManager.hasFabriXKeys()) {
                     try {
+                        CopilotLogger.info("FabriX 모델 리스트 조회 중...");
                         List<FabriXModel> fabrixModels = getFabriXModels();
+                        
                         for (FabriXModel fabrixModel : fabrixModels) {
                             allModels.add(new ModelInfo(
                                 fabrixModel.getModelId(), 
@@ -369,8 +380,19 @@ public class LLMClient {
                                 true
                             ));
                         }
+                        CopilotLogger.info("FabriX 모델 " + fabrixModels.size() + "개 로드 성공");
+                        
                     } catch (Exception e) {
-                        CopilotLogger.warn("Failed to load FabriX models, continuing with OpenAI models only", e);
+                        CopilotLogger.error("FabriX 모델 리스트 로딩 실패, Gemma3 기본 모델 추가", e);
+                        
+                        // ⭐ Gemma3 모델을 기본으로 추가
+                        allModels.add(new ModelInfo(
+                            FABRIX_DEFAULT_MODEL_ID,     // "116"
+                            FABRIX_DEFAULT_MODEL_NAME,   // "Gemma3"
+                            "Gemma3 (Default)",          // 표시 이름
+                            "FabriX Gemma3 모델 (기본)", // 설명
+                            true                         // isFabriX = true
+                        ));
                     }
                 }
                 
@@ -379,6 +401,7 @@ public class LLMClient {
                 }
                 
                 onSuccess.accept(allModels);
+                
             } catch (Exception e) {
                 onError.accept(e);
             }
@@ -436,6 +459,7 @@ public class LLMClient {
 
     private boolean isFabriXModel(String modelId) {
         if (fabriXModelsCache.containsKey(modelId)) return true;
+        if (FABRIX_DEFAULT_MODEL_ID.equals(modelId)) return true; // 116은 항상 FabriX
         return modelId != null && (modelId.contains("fabrix") || modelId.contains("sds") || !modelId.startsWith("gpt"));
     }
 

@@ -75,7 +75,7 @@ public class McpStdioClient {
             Thread.sleep(500); // 프로세스 시작 대기
             
             if (!process.isAlive()) {
-                CopilotLogger.error("Process died immediately");
+            	CopilotLogger.error("Process died immediately", null);
                 return false;
             }
             

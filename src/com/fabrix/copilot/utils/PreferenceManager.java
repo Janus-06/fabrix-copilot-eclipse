@@ -81,6 +81,8 @@ public class PreferenceManager {
         preferenceStore.setDefault(DEFAULT_PROVIDER, "openai");
         preferenceStore.setDefault(TEMPERATURE, "0.7");
         preferenceStore.setDefault(MAX_TOKENS, "2048");
+        preferenceStore.setDefault(SELECTED_MODEL, "116"); // Gemma3를 기본으로
+        preferenceStore.setDefault(DEFAULT_PROVIDER, "fabrix"); // FabriX를 기본으로
         
         // UI Settings
         preferenceStore.setDefault(AUTO_SCROLL, true);

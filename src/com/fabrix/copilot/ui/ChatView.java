@@ -932,7 +932,93 @@ public class ChatView extends ViewPart {
                sendButton == null || sendButton.isDisposed() ||
                statusLabel == null || statusLabel.isDisposed();
     }
-    
+ // ChatView.java에 추가할 메서드
+
+    /**
+     * MCP 연결 테스트 메서드
+     * 이 메서드를 ChatView 클래스에 추가하고, 
+     * 적절한 위치(예: MCP 버튼 클릭 이벤트)에서 호출하세요
+     */
+    private void testMCPConnection() {
+        try {
+            McpServerManager manager = McpServerManager.getInstance();
+            McpServerManager.McpStatus status = manager.getStatus();
+            
+            addMessage("🔍 MCP 연결 테스트 시작...", false);
+            
+            // 연결 상태 확인
+            addMessage(String.format("📊 연결된 서버: %d개, 총 도구: %d개", 
+                status.getConnectedServers(), status.getTotalTools()), false);
+            
+            if (status.getConnectedServers() > 0) {
+                // 연결된 도구 목록 표시
+                Map<String, List<McpServerManager.McpTool>> tools = manager.getConnectedTools();
+                for (Map.Entry<String, List<McpServerManager.McpTool>> entry : tools.entrySet()) {
+                    String serverName = entry.getKey();
+                    List<McpServerManager.McpTool> serverTools = entry.getValue();
+                    
+                    addMessage(String.format("🔌 서버 [%s]: %d개 도구", serverName, serverTools.size()), false);
+                    
+                    // 첫 번째 도구로 테스트
+                    if (!serverTools.isEmpty()) {
+                        McpServerManager.McpTool firstTool = serverTools.get(0);
+                        addMessage("🛠️ 도구 테스트: " + firstTool.getName(), false);
+                        
+                        try {
+                            // 테스트 파라미터 준비
+                            Map<String, Object> testParams = new HashMap<>();
+                            
+                            // 도구별 테스트 파라미터 설정
+                            if (firstTool.getName().equalsIgnoreCase("GetProgram")) {
+                                testParams.put("program_name", "RSABAPPROGRAM");
+                            } else if (firstTool.getName().equalsIgnoreCase("SearchPrograms")) {
+                                testParams.put("search_pattern", "*TEST*");
+                                testParams.put("max_results", 5);
+                            }
+                            // 다른 도구들에 대한 테스트 파라미터 추가...
+                            
+                            // 도구 실행
+                            String result = manager.executeTool(firstTool.getName(), 
+                                testParams, "MCP Connection Test");
+                                
+                            addMessage("✅ 도구 실행 성공:\n" + result, false);
+                            
+                        } catch (Exception e) {
+                            addMessage("❌ 도구 실행 실패: " + e.getMessage(), false);
+                            CopilotLogger.error("MCP tool execution failed", e);
+                        }
+                    }
+                }
+            } else {
+                addMessage("⚠️ 연결된 MCP 서버가 없습니다. MCP Manager에서 서버를 추가해주세요.", false);
+            }
+            
+        } catch (Exception e) {
+            addMessage("❌ MCP 테스트 중 오류 발생: " + e.getMessage(), false);
+            CopilotLogger.error("MCP connection test failed", e);
+        }
+    }
+
+    /**
+     * MCP 버튼 클릭 이벤트 핸들러 수정
+     * 기존의 openMCPDialog() 호출 부분을 다음과 같이 수정할 수 있습니다
+     */
+    private void createMCPButton() {
+        mcpButton = new Button(headerComposite, SWT.PUSH);
+        mcpButton.setText("🔌 MCP");
+        mcpButton.setToolTipText("MCP Manager - Shift+클릭으로 연결 테스트");
+        mcpButton.addSelectionListener(new SelectionAdapter() {
+            @Override
+            public void widgetSelected(SelectionEvent e) {
+                // Shift 키를 누르고 클릭하면 테스트 실행
+                if ((e.stateMask & SWT.SHIFT) != 0) {
+                    testMCPConnection();
+                } else {
+                    openMCPDialog();
+                }
+            }
+        });
+    }
     // MCP 도구 사용 여부 결정 - MCP가 설정되어 있고 명시적 요청인 경우만
     private boolean shouldUseMCPTool(String message) {
         // MCP 서버가 연결되어 있는지 확인
@@ -1264,7 +1350,18 @@ public class ChatView extends ViewPart {
     private String getSelectedModelId() {
         String selected = modelCombo.getText();
         ModelInfo model = modelMap.get(selected);
-        return model != null ? model.getModelId() : preferenceManager.getSelectedModel();
+        
+        if (model != null) {
+            return model.getModelId();
+        }
+        
+        // 모델을 찾을 수 없으면 FabriX 키가 있는 경우 Gemma3 사용
+        if (preferenceManager.hasFabriXKeys()) {
+            CopilotLogger.info("모델 선택 실패, Gemma3(116) 사용");
+            return "116";
+        }
+        
+        return preferenceManager.getSelectedModel();
     }
     
     private void attachCurrentCode() {
